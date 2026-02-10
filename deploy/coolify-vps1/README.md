@@ -83,6 +83,12 @@ Expected output: `PONG`
 
 Control-plane and web deploys are updated through Coolify (not SSH jobs).
 
+Set these as GitHub **Secrets** (not Variables), preferably under matching
+Environment scopes:
+
+- `staging` environment: `STAGING_WORKER_VPS_*`
+- `production` environment: `PRODUCTION_WORKER_VPS_*`
+
 ## Runtime Build (Pinned)
 
 Build and push runtime image with a pinned tag:

@@ -64,6 +64,13 @@ jobs:
     needs: build-images
     environment: staging
     steps:
+      - name: Validate staging worker deploy secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${{ secrets.STAGING_WORKER_VPS_HOST }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_HOST (environment: staging)"; exit 1; }
+          [ -n "${{ secrets.STAGING_WORKER_VPS_USER }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_USER (environment: staging)"; exit 1; }
+          [ -n "${{ secrets.STAGING_WORKER_VPS_SSH_KEY }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_SSH_KEY (environment: staging)"; exit 1; }
       - name: Deploy Worker VPS (staging)
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -83,6 +90,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Validate production worker deploy secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${{ secrets.PRODUCTION_WORKER_VPS_HOST }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_HOST (environment: production)"; exit 1; }
+          [ -n "${{ secrets.PRODUCTION_WORKER_VPS_USER }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_USER (environment: production)"; exit 1; }
+          [ -n "${{ secrets.PRODUCTION_WORKER_VPS_SSH_KEY }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_SSH_KEY (environment: production)"; exit 1; }
       - name: Deploy Worker VPS (production)
         uses: appleboy/ssh-action@v1.2.0
         with:
