@@ -71,12 +71,14 @@ jobs:
           [ -n "${{ secrets.STAGING_WORKER_VPS_HOST }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_HOST (environment: staging)"; exit 1; }
           [ -n "${{ secrets.STAGING_WORKER_VPS_USER }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_USER (environment: staging)"; exit 1; }
           [ -n "${{ secrets.STAGING_WORKER_VPS_SSH_KEY }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_SSH_KEY (environment: staging)"; exit 1; }
+          [ -n "${{ secrets.STAGING_WORKER_VPS_SSH_PASSPHRASE }}" ] || { echo "Missing secret: STAGING_WORKER_VPS_SSH_PASSPHRASE (environment: staging)"; exit 1; }
       - name: Deploy Worker VPS (staging)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.STAGING_WORKER_VPS_HOST }}
           username: ${{ secrets.STAGING_WORKER_VPS_USER }}
           key: ${{ secrets.STAGING_WORKER_VPS_SSH_KEY }}
+          passphrase: ${{ secrets.STAGING_WORKER_VPS_SSH_PASSPHRASE }}
           script: |
             set -eu
             cd /opt/nexus/deploy/worker-vps
@@ -97,12 +99,14 @@ jobs:
           [ -n "${{ secrets.PRODUCTION_WORKER_VPS_HOST }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_HOST (environment: production)"; exit 1; }
           [ -n "${{ secrets.PRODUCTION_WORKER_VPS_USER }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_USER (environment: production)"; exit 1; }
           [ -n "${{ secrets.PRODUCTION_WORKER_VPS_SSH_KEY }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_SSH_KEY (environment: production)"; exit 1; }
+          [ -n "${{ secrets.PRODUCTION_WORKER_VPS_SSH_PASSPHRASE }}" ] || { echo "Missing secret: PRODUCTION_WORKER_VPS_SSH_PASSPHRASE (environment: production)"; exit 1; }
       - name: Deploy Worker VPS (production)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.PRODUCTION_WORKER_VPS_HOST }}
           username: ${{ secrets.PRODUCTION_WORKER_VPS_USER }}
           key: ${{ secrets.PRODUCTION_WORKER_VPS_SSH_KEY }}
+          passphrase: ${{ secrets.PRODUCTION_WORKER_VPS_SSH_PASSPHRASE }}
           script: |
             set -eu
             test -n "${{ github.event.inputs.image_tag }}"
