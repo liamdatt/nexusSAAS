@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  runtime:
+    image: ${NEXUS_IMAGE}
+    container_name: tenant_${TENANT_ID}_runtime
+    restart: unless-stopped
+    env_file:
+      - /opt/nexus/tenants/${TENANT_ID}/env/runtime.env
+    volumes:
+      - tenant_${TENANT_ID}_session:/data/session
+      - tenant_${TENANT_ID}_state:/data/state
+      - /opt/nexus/tenants/${TENANT_ID}/config:/data/config:ro
+    networks:
+      - ${TENANT_NETWORK}
+    expose:
+      - "${BRIDGE_PORT}"
+    cpus: 0.80
+    mem_limit: 1152m
+
+volumes:
+  tenant_${TENANT_ID}_session:
+  tenant_${TENANT_ID}_state:
+
+networks:
+  ${TENANT_NETWORK}:
+    external: true

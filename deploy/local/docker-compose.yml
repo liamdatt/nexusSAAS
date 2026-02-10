@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - local_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - local_redis_data:/data
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: services/runner/Dockerfile
+    environment:
+      RUNNER_SHARED_SECRET: dev-runner-shared-secret
+      RUNNER_JWT_ALG: HS256
+      REDIS_URL: redis://redis:6379/0
+      TENANT_ROOT: /opt/nexus/tenants
+      TENANT_NETWORK: runner_internal
+      NEXUS_IMAGE: ghcr.io/your-org/nexus-runtime:sha-REPLACE_WITH_COMMIT
+      TEMPLATE_COMPOSE_PATH: /app/runtime/templates/tenant-compose.yml.tmpl
+      TEMPLATE_ENV_PATH: /app/runtime/templates/runtime.env.tmpl
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - local_tenants:/opt/nexus/tenants
+    depends_on:
+      - redis
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: services/control-plane/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+      APP_JWT_SECRET: dev-app-jwt-secret
+      APP_JWT_ALG: HS256
+      RUNNER_BASE_URL: http://runner:8000
+      RUNNER_SHARED_SECRET: dev-runner-shared-secret
+      RUNNER_TOKEN_TTL_SECONDS: 60
+      NEXUS_IMAGE: ghcr.io/your-org/nexus-runtime:sha-REPLACE_WITH_COMMIT
+      RATELIMIT_SIGNUP_PER_MINUTE: 30
+    ports:
+      - "9000:9000"
+    depends_on:
+      - postgres
+      - redis
+      - runner
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    environment:
+      NEXT_PUBLIC_CONTROL_API_BASE: http://localhost:9000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - control-plane
+
+volumes:
+  local_postgres_data:
+  local_redis_data:
+  local_tenants:

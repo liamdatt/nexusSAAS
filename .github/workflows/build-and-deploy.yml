@@ -1,0 +1,99 @@
+name: Build and Deploy (Worker)
+
+# In Coolify mode, VPS1 (web/control-plane/postgres/redis) is deployed by Coolify.
+# This workflow builds SaaS images and deploys runner on VPS2.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      promote_to_production:
+        description: "Set true to deploy an existing image tag to production"
+        required: true
+        type: boolean
+        default: false
+      image_tag:
+        description: "Image tag (commit SHA) to promote to production"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: nexus-control-plane
+            dockerfile: services/control-plane/Dockerfile
+          - name: nexus-runner
+            dockerfile: services/runner/Dockerfile
+          - name: nexus-web
+            dockerfile: apps/web/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:${{ github.sha }}
+
+  deploy-staging-worker:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: build-images
+    environment: staging
+    steps:
+      - name: Deploy Worker VPS (staging)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_WORKER_VPS_HOST }}
+          username: ${{ secrets.STAGING_WORKER_VPS_USER }}
+          key: ${{ secrets.STAGING_WORKER_VPS_SSH_KEY }}
+          script: |
+            set -eu
+            cd /opt/nexus/deploy/worker-vps
+            docker network inspect runner_internal >/dev/null 2>&1 || docker network create runner_internal
+            export IMAGE_TAG=${{ github.sha }}
+            docker compose pull runner
+            docker compose up -d runner
+
+  deploy-production-worker:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.promote_to_production == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy Worker VPS (production)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PRODUCTION_WORKER_VPS_HOST }}
+          username: ${{ secrets.PRODUCTION_WORKER_VPS_USER }}
+          key: ${{ secrets.PRODUCTION_WORKER_VPS_SSH_KEY }}
+          script: |
+            set -eu
+            test -n "${{ github.event.inputs.image_tag }}"
+            cd /opt/nexus/deploy/worker-vps
+            docker network inspect runner_internal >/dev/null 2>&1 || docker network create runner_internal
+            export IMAGE_TAG=${{ github.event.inputs.image_tag }}
+            docker compose pull runner
+            docker compose up -d runner

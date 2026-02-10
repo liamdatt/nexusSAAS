@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  runner:
+    image: ghcr.io/${GITHUB_ORG}/nexus-runner:${IMAGE_TAG}
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://${CONTROL_PRIVATE_IP}:6379/0
+      TENANT_NETWORK: runner_internal
+      TEMPLATE_COMPOSE_PATH: /app/runtime/templates/tenant-compose.yml.tmpl
+      TEMPLATE_ENV_PATH: /app/runtime/templates/runtime.env.tmpl
+    ports:
+      - "${RUNNER_BIND_IP:-10.0.0.20}:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/nexus/tenants:/opt/nexus/tenants
+    networks:
+      - runner_internal
+
+networks:
+  runner_internal:
+    external: true

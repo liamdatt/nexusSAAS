@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  traefik:
+    image: traefik:v3.2
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - control_public
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - control_private
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - control_private
+
+  control-plane:
+    image: ghcr.io/${GITHUB_ORG}/nexus-control-plane:${IMAGE_TAG}
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-nexus}
+      REDIS_URL: redis://redis:6379/0
+      RUNNER_BASE_URL: http://${RUNNER_PRIVATE_IP:-10.0.0.20}:8000
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - control_private
+      - control_public
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.control.rule=Host(`${CONTROL_API_HOST}`)
+      - traefik.http.routers.control.entrypoints=websecure
+      - traefik.http.routers.control.tls.certresolver=letsencrypt
+      - traefik.http.services.control.loadbalancer.server.port=9000
+
+  web:
+    image: ghcr.io/${GITHUB_ORG}/nexus-web:${IMAGE_TAG}
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_CONTROL_API_BASE: https://${CONTROL_API_HOST}
+    depends_on:
+      - control-plane
+    networks:
+      - control_public
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`${WEB_HOST}`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.tls.certresolver=letsencrypt
+      - traefik.http.services.web.loadbalancer.server.port=3000
+
+networks:
+  control_public:
+    driver: bridge
+  control_private:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

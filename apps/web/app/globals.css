@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f4f7ee;
+  --surface: #ffffff;
+  --ink: #0f1b12;
+  --muted: #4d6353;
+  --line: #dbe7d7;
+  --primary: #005f4b;
+  --accent: #d9ff4f;
+  --danger: #8f2a2a;
+  --font-sans: "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
+  --font-display: "Gill Sans", "Trebuchet MS", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 85% 20%, #d9ff4f66, transparent 45%),
+    radial-gradient(circle at 20% 85%, #90d7c144, transparent 40%),
+    var(--bg);
+  font-family: var(--font-sans), sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display), sans-serif;
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.container {
+  width: min(1120px, 100% - 2rem);
+  margin: 0 auto;
+  padding: 2rem 0 3rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 960px) {
+  .grid.cols-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  background: #fff;
+}
+
+textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+button.primary {
+  background: var(--primary);
+  color: white;
+  border: 1px solid var(--primary);
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.85rem;
+}
+
+button.secondary {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.85rem;
+}
+
+button.warn {
+  background: #fff;
+  color: var(--danger);
+  border: 1px solid #f4b0b0;
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.85rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #e9f6ef;
+  color: #0d6444;
+}
+
+.badge.warn {
+  background: #fff3d4;
+  color: #7f5b00;
+}
+
+.badge.err {
+  background: #ffe8e8;
+  color: #842727;
+}
+
+.mono {
+  font-family: ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+.events {
+  max-height: 280px;
+  overflow: auto;
+  font-size: 0.86rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 0.65rem;
+  background: #fbfdf8;
+}
+
+.events-item {
+  border-bottom: 1px dashed var(--line);
+  padding: 0.45rem 0;
+}
+
+.events-item:last-child {
+  border-bottom: 0;
+}
