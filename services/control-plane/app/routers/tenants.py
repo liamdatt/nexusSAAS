@@ -356,6 +356,11 @@ async def patch_config(
 
     merged = dict(active.env_json)
     merged.update(body.values)
+    for key in body.remove_keys:
+        merged.pop(key, None)
+
+    if merged == active.env_json:
+        return ConfigOut(tenant_id=tenant_id, revision=active.revision, env_json=active.env_json)
 
     next_rev = (db.scalar(select(func.max(ConfigRevision.revision)).where(ConfigRevision.tenant_id == tenant_id)) or 0) + 1
     new_rev = ConfigRevision(tenant_id=tenant_id, revision=next_rev, env_json=merged, is_active=False)

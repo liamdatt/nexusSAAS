@@ -196,3 +196,71 @@ def test_start_restart_pair_require_openrouter_api_key(client: TestClient) -> No
     assert start_resp.json()["detail"]["error"] == "openrouter_api_key_required"
     assert restart_resp.json()["detail"]["error"] == "openrouter_api_key_required"
     assert pair_resp.json()["detail"]["error"] == "openrouter_api_key_required"
+
+
+def test_config_patch_values_persist(client: TestClient) -> None:
+    user = _signup(client, "contracts-values@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    update_resp = client.patch(
+        f"/v1/tenants/{tenant_id}/config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"values": {"EXTRA_FLAG": "enabled"}},
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["revision"] == 2
+    assert update_resp.json()["env_json"]["EXTRA_FLAG"] == "enabled"
+
+    config = client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"})
+    assert config.status_code == 200
+    assert config.json()["revision"] == 2
+    assert config.json()["env_json"]["EXTRA_FLAG"] == "enabled"
+
+
+def test_config_patch_remove_keys_deletes_values(client: TestClient) -> None:
+    user = _signup(client, "contracts-remove@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    add_resp = client.patch(
+        f"/v1/tenants/{tenant_id}/config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"values": {"TEMP_DELETE": "1"}},
+    )
+    assert add_resp.status_code == 200
+    assert add_resp.json()["env_json"]["TEMP_DELETE"] == "1"
+
+    remove_resp = client.patch(
+        f"/v1/tenants/{tenant_id}/config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"values": {}, "remove_keys": ["TEMP_DELETE"]},
+    )
+    assert remove_resp.status_code == 200
+    assert "TEMP_DELETE" not in remove_resp.json()["env_json"]
+
+    config = client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"})
+    assert config.status_code == 200
+    assert "TEMP_DELETE" not in config.json()["env_json"]
+
+
+def test_config_patch_noop_keeps_revision(client: TestClient) -> None:
+    user = _signup(client, "contracts-noop@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    before = client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"})
+    assert before.status_code == 200
+    before_revision = before.json()["revision"]
+
+    noop = client.patch(
+        f"/v1/tenants/{tenant_id}/config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"values": {}, "remove_keys": []},
+    )
+    assert noop.status_code == 200
+    assert noop.json()["revision"] == before_revision
+
+    after = client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 200
+    assert after.json()["revision"] == before_revision

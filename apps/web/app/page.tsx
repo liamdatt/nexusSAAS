@@ -32,7 +32,25 @@ type EventItem = {
   payload?: Record<string, unknown>;
 };
 
+type ConfigRow = {
+  id: string;
+  key: string;
+  value: string;
+};
+
 const TOKEN_KEY = "nexus_saas_tokens";
+const CONFIG_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SENSITIVE_KEY_RE = /(KEY|SECRET|TOKEN|PASSWORD)/i;
+
+function makeConfigRow(key: string, value: string): ConfigRow {
+  return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, key, value };
+}
+
+function toConfigRows(env: Record<string, string>): ConfigRow[] {
+  return Object.entries(env)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => makeConfigRow(key, value));
+}
 
 function safeJsonParse<T>(value: string, fallback: T): T {
   try {
@@ -48,8 +66,9 @@ export default function Home() {
   const [tokens, setTokens] = useState<Tokens | null>(null);
   const [tenantId, setTenantId] = useState("");
   const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [configText, setConfigText] = useState("{}");
-  const [configEnv, setConfigEnv] = useState<Record<string, string>>({});
+  const [configRows, setConfigRows] = useState<ConfigRow[]>([]);
+  const [originalConfig, setOriginalConfig] = useState<Record<string, string>>({});
+  const [revealedConfigRows, setRevealedConfigRows] = useState<Record<string, boolean>>({});
   const [promptName, setPromptName] = useState("system");
   const [promptContent, setPromptContent] = useState("You are Nexus.");
   const [skillId, setSkillId] = useState("default");
@@ -68,8 +87,9 @@ export default function Home() {
     setTokens(null);
     setTenantId("");
     setStatus(null);
-    setConfigText("{}");
-    setConfigEnv({});
+    setConfigRows([]);
+    setOriginalConfig({});
+    setRevealedConfigRows({});
     setPrompts([]);
     setSkills([]);
     setEvents([]);
@@ -230,11 +250,13 @@ export default function Home() {
     if (!id || !token) return;
     try {
       const data = await api<ConfigResponse>(`/v1/tenants/${id}/config`, {}, token);
-      setConfigEnv(data.env_json);
-      setConfigText(JSON.stringify(data.env_json, null, 2));
+      setOriginalConfig(data.env_json);
+      setConfigRows(toConfigRows(data.env_json));
+      setRevealedConfigRows({});
     } catch {
-      setConfigEnv({});
-      setConfigText("{}");
+      setOriginalConfig({});
+      setConfigRows([]);
+      setRevealedConfigRows({});
     }
   }
 
@@ -271,21 +293,63 @@ export default function Home() {
     }
   }
 
+  function updateConfigRow(id: string, field: "key" | "value", next: string) {
+    setConfigRows((prev) => prev.map((row) => (row.id === id ? { ...row, [field]: next } : row)));
+  }
+
+  function removeConfigRow(id: string) {
+    setConfigRows((prev) => prev.filter((row) => row.id !== id));
+    setRevealedConfigRows((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+  }
+
+  function addConfigRow() {
+    setConfigRows((prev) => [...prev, makeConfigRow("", "")]);
+  }
+
+  function isSensitiveKey(key: string): boolean {
+    return SENSITIVE_KEY_RE.test(key);
+  }
+
+  function toggleRevealConfigRow(id: string) {
+    setRevealedConfigRows((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
   async function saveConfig() {
     if (!tokens || !tenantId) return;
     setBusy(true);
     setError("");
     try {
-      const values = safeJsonParse<Record<string, string>>(configText, {});
+      const values: Record<string, string> = {};
+      const seen = new Set<string>();
+      for (const row of configRows) {
+        const key = row.key.trim();
+        if (!key) {
+          throw new Error("Config variable name is required.");
+        }
+        if (!CONFIG_KEY_RE.test(key)) {
+          throw new Error(`Invalid config variable name: ${key}`);
+        }
+        if (seen.has(key)) {
+          throw new Error(`Duplicate config variable name: ${key}`);
+        }
+        seen.add(key);
+        values[key] = row.value;
+      }
+      const removeKeys = Object.keys(originalConfig).filter((key) => !(key in values));
       await api(
         `/v1/tenants/${tenantId}/config`,
         {
           method: "PATCH",
-          body: JSON.stringify({ values }),
+          body: JSON.stringify({ values, remove_keys: removeKeys }),
         },
         tokens.access_token,
       );
       await loadConfig(tenantId, tokens.access_token);
+      await fetchStatus(tenantId, tokens.access_token);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -343,9 +407,9 @@ export default function Home() {
   }, [status]);
 
   const hasOpenRouterKey = useMemo(() => {
-    const value = configEnv.NEXUS_OPENROUTER_API_KEY;
+    const value = originalConfig.NEXUS_OPENROUTER_API_KEY;
     return Boolean(value && String(value).trim());
-  }, [configEnv]);
+  }, [originalConfig]);
 
   return (
     <main className="container">
@@ -466,9 +530,77 @@ export default function Home() {
 
           <article className="card">
             <h2 style={{ marginTop: 0 }}>Runtime Config</h2>
-            <label>Env JSON</label>
-            <textarea className="mono" value={configText} onChange={(e) => setConfigText(e.target.value)} />
-            <div className="row" style={{ marginTop: "0.65rem" }}>
+            <div style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: "0.75rem" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+                <thead>
+                  <tr style={{ background: "#fbfdf8" }}>
+                    <th style={{ textAlign: "left", padding: "0.55rem", borderBottom: "1px solid var(--line)" }}>Variable</th>
+                    <th style={{ textAlign: "left", padding: "0.55rem", borderBottom: "1px solid var(--line)" }}>Value</th>
+                    <th style={{ textAlign: "left", padding: "0.55rem", borderBottom: "1px solid var(--line)", width: 140 }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {configRows.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ padding: "0.65rem", color: "var(--muted)" }}>
+                        No variables yet. Add one below.
+                      </td>
+                    </tr>
+                  )}
+                  {configRows.map((row) => {
+                    const sensitive = isSensitiveKey(row.key);
+                    const revealed = Boolean(revealedConfigRows[row.id]);
+                    return (
+                      <tr key={row.id}>
+                        <td style={{ padding: "0.45rem", borderTop: "1px solid var(--line)" }}>
+                          <input
+                            className="mono"
+                            value={row.key}
+                            onChange={(e) => updateConfigRow(row.id, "key", e.target.value)}
+                            placeholder="NEXUS_OPENROUTER_API_KEY"
+                          />
+                        </td>
+                        <td style={{ padding: "0.45rem", borderTop: "1px solid var(--line)" }}>
+                          <input
+                            className="mono"
+                            type={sensitive && !revealed ? "password" : "text"}
+                            value={row.value}
+                            onChange={(e) => updateConfigRow(row.id, "value", e.target.value)}
+                            placeholder="value"
+                          />
+                        </td>
+                        <td style={{ padding: "0.45rem", borderTop: "1px solid var(--line)" }}>
+                          <div className="row" style={{ gap: "0.4rem" }}>
+                            {sensitive && (
+                              <button
+                                className="secondary"
+                                type="button"
+                                onClick={() => toggleRevealConfigRow(row.id)}
+                                style={{ padding: "0.35rem 0.55rem" }}
+                              >
+                                {revealed ? "Hide" : "Show"}
+                              </button>
+                            )}
+                            <button
+                              className="warn"
+                              type="button"
+                              onClick={() => removeConfigRow(row.id)}
+                              style={{ padding: "0.35rem 0.55rem" }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="row" style={{ marginTop: "0.65rem", justifyContent: "space-between" }}>
+              <button className="secondary" type="button" onClick={addConfigRow} disabled={busy || !tenantId}>
+                Add Variable
+              </button>
               <button className="primary" disabled={busy || !tenantId} onClick={saveConfig}>
                 Save Config
               </button>

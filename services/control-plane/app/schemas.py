@@ -72,6 +72,7 @@ class ConfigOut(BaseModel):
 
 class ConfigPatchRequest(BaseModel):
     values: dict[str, str]
+    remove_keys: list[str] = Field(default_factory=list)
 
 
 class PromptPutRequest(BaseModel):
