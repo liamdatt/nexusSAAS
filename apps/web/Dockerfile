@@ -5,6 +5,8 @@ RUN npm ci
 
 FROM node:22-alpine AS build
 WORKDIR /app
+ARG NEXT_PUBLIC_CONTROL_API_BASE=https://nexus-api.floproja.com
+ENV NEXT_PUBLIC_CONTROL_API_BASE=$NEXT_PUBLIC_CONTROL_API_BASE
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/web ./
 RUN npm run build
