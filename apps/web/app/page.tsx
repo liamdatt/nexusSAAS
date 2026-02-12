@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, apiBase, Tokens, wsUrl } from "@/lib/api";
 
@@ -58,6 +58,7 @@ export default function Home() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const tenantBootstrapAttemptedToken = useRef<string | null>(null);
 
   function logout() {
     localStorage.removeItem(TOKEN_KEY);
@@ -69,6 +70,7 @@ export default function Home() {
     setSkills([]);
     setEvents([]);
     setError("");
+    tenantBootstrapAttemptedToken.current = null;
   }
 
   useEffect(() => {
@@ -90,7 +92,20 @@ export default function Home() {
   }, [tokens]);
 
   useEffect(() => {
-    if (!tokens) {
+    if (!tokens || tenantId) {
+      return;
+    }
+    if (tenantBootstrapAttemptedToken.current === tokens.access_token) {
+      return;
+    }
+    tenantBootstrapAttemptedToken.current = tokens.access_token;
+    void loadTenant(tokens.access_token);
+    // Tenant bootstrap is intentionally scoped to tenant/token.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, tokens]);
+
+  useEffect(() => {
+    if (!tokens || !tenantId) {
       return;
     }
 
@@ -120,7 +135,10 @@ export default function Home() {
       });
       setTokens(data.tokens);
       // Automatically load or create tenant after login
-      await loadTenant(data.tokens.access_token);
+      if (tenantBootstrapAttemptedToken.current !== data.tokens.access_token) {
+        tenantBootstrapAttemptedToken.current = data.tokens.access_token;
+        await loadTenant(data.tokens.access_token);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_control_plane_contracts.db"
 os.environ["CONTROL_AUTO_CREATE_SCHEMA"] = "true"
 os.environ["REDIS_URL"] = "redis://127.0.0.1:6399/0"
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -51,17 +53,22 @@ class DummyRunner:
 
 
 tenants.runner = DummyRunner()
-client = TestClient(app)
 
 
-def _signup(email: str) -> dict:
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    with TestClient(app) as c:
+        yield c
+
+
+def _signup(client: TestClient, email: str) -> dict:
     resp = client.post("/v1/auth/signup", json={"email": email, "password": "supersecure123"})
     assert resp.status_code == 200
     return resp.json()
 
 
-def test_control_plane_routes_contract_and_auth() -> None:
-    user = _signup("contracts-a@example.com")
+def test_control_plane_routes_contract_and_auth(client: TestClient) -> None:
+    user = _signup(client, "contracts-a@example.com")
     token = user["tokens"]["access_token"]
 
     setup = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token}"}, json={})
@@ -120,20 +127,20 @@ def test_control_plane_routes_contract_and_auth() -> None:
     assert unauthorized.status_code == 401
 
 
-def test_cross_tenant_isolation() -> None:
-    user_a = _signup("isolation-a@example.com")
+def test_cross_tenant_isolation(client: TestClient) -> None:
+    user_a = _signup(client, "isolation-a@example.com")
     token_a = user_a["tokens"]["access_token"]
     tenant_a = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token_a}"}, json={}).json()["id"]
 
-    user_b = _signup("isolation-b@example.com")
+    user_b = _signup(client, "isolation-b@example.com")
     token_b = user_b["tokens"]["access_token"]
 
     denied = client.get(f"/v1/tenants/{tenant_a}/status", headers={"Authorization": f"Bearer {token_b}"})
     assert denied.status_code == 404
 
 
-def test_config_revision_activation_only_on_successful_apply() -> None:
-    user = _signup("contracts-config@example.com")
+def test_config_revision_activation_only_on_successful_apply(client: TestClient) -> None:
+    user = _signup(client, "contracts-config@example.com")
     token = user["tokens"]["access_token"]
     tenant_id = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token}"}, json={}).json()["id"]
 

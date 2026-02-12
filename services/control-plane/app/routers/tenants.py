@@ -69,10 +69,7 @@ async def setup_tenant(
 ) -> TenantOut:
     existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
     if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"error": "tenant_already_exists", "message": "User already has a tenant", "tenant_id": existing.id},
-        )
+        return TenantOut.model_validate(existing, from_attributes=True)
 
     tenant_id = secrets.token_hex(8)
     tenant = Tenant(id=tenant_id, owner_user_id=user.id, status="provisioning", worker_id="worker-1")
@@ -102,9 +99,12 @@ async def setup_tenant(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
+        if existing is not None:
+            return TenantOut.model_validate(existing, from_attributes=True)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"error": "tenant_already_exists", "message": "User already has a tenant"},
+            detail={"error": "tenant_setup_conflict", "message": "Could not complete tenant setup"},
         ) from exc
     db.refresh(tenant)
 
