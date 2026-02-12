@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -8,6 +9,8 @@ from pathlib import Path
 from string import Template
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeErrorManager(RuntimeError):
@@ -20,6 +23,8 @@ class RuntimeErrorManager(RuntimeError):
 class RuntimeManager:
     TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
     CONFIG_ITEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    LEGACY_CONFIG_RO_MOUNT = ":/data/config:ro"
+    CONFIG_RW_MOUNT = ":/data/config"
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -222,6 +227,8 @@ class RuntimeManager:
 
     def compose_start(self, tenant_id: str) -> None:
         self.validate_layout(tenant_id, require_existing=True)
+        if self._migrate_legacy_config_mount(tenant_id):
+            logger.info("Updated legacy compose config mount to read-write for tenant_id=%s", tenant_id)
         self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d"])
 
     def compose_stop(self, tenant_id: str) -> None:
@@ -259,3 +266,16 @@ class RuntimeManager:
         if str(tenant_dir).strip() in {"", "/"}:
             raise RuntimeErrorManager("unsafe_path", "Refusing to delete unsafe path")
         shutil.rmtree(tenant_dir)
+
+    def _migrate_legacy_config_mount(self, tenant_id: str) -> bool:
+        compose_path = self.compose_file(tenant_id)
+        original = compose_path.read_text(encoding="utf-8")
+        if self.LEGACY_CONFIG_RO_MOUNT not in original:
+            return False
+
+        updated = original.replace(self.LEGACY_CONFIG_RO_MOUNT, self.CONFIG_RW_MOUNT)
+        if updated == original:
+            return False
+
+        compose_path.write_text(updated, encoding="utf-8")
+        return True

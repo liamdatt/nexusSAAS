@@ -10,7 +10,7 @@ services:
     volumes:
       - tenant_${TENANT_ID}_session:/data/session
       - tenant_${TENANT_ID}_state:/data/state
-      - /opt/nexus/tenants/${TENANT_ID}/config:/data/config:ro
+      - /opt/nexus/tenants/${TENANT_ID}/config:/data/config
     networks:
       - ${TENANT_NETWORK}
     expose:
