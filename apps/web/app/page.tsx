@@ -133,7 +133,22 @@ export default function Home() {
       await loadPrompts(data.id, tokens.access_token);
       await loadSkills(data.id, tokens.access_token);
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      try {
+        const detail = JSON.parse(msg);
+        if (detail?.detail?.tenant_id) {
+          const existingId = detail.detail.tenant_id;
+          setTenantId(existingId);
+          await fetchStatus(existingId, tokens.access_token);
+          await loadConfig(existingId, tokens.access_token);
+          await loadPrompts(existingId, tokens.access_token);
+          await loadSkills(existingId, tokens.access_token);
+          return;
+        }
+      } catch {
+        // not JSON, fall through
+      }
+      setError(msg);
     } finally {
       setBusy(false);
     }

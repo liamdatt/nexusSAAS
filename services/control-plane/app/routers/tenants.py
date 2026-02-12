@@ -69,7 +69,10 @@ async def setup_tenant(
 ) -> TenantOut:
     existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already has a tenant")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "tenant_already_exists", "message": "User already has a tenant", "tenant_id": existing.id},
+        )
 
     tenant_id = secrets.token_hex(8)
     tenant = Tenant(id=tenant_id, owner_user_id=user.id, status="provisioning", worker_id="worker-1")
