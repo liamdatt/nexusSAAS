@@ -5,7 +5,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates nodejs npm \
+    && apt-get install -y --no-install-recommends curl ca-certificates nodejs npm git openssh-client \
+    && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
+    && git config --global url."https://github.com/".insteadOf "git@github.com:" \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g tsx@4
