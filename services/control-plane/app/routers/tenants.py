@@ -84,6 +84,8 @@ async def setup_tenant(
         initial_env.update(body.initial_config)
 
     tenant: Tenant | None = None
+    runtime: TenantRuntime | None = None
+    tenant_id = ""
     bridge_secret = ""
     last_integrity_error: IntegrityError | None = None
     for _attempt in range(3):
@@ -101,7 +103,25 @@ async def setup_tenant(
         )
         config_rev = ConfigRevision(tenant_id=tenant_id, revision=1, env_json=initial_env, is_active=True)
 
-        db.add_all([tenant, runtime, tenant_secret, config_rev])
+        db.add(tenant)
+        try:
+            # Ensure parent tenant row exists before child rows are flushed.
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            last_integrity_error = exc
+            logger.warning(
+                "Tenant setup integrity conflict for user_id=%s on attempt=%s stage=tenant_flush: %s",
+                user.id,
+                _attempt + 1,
+                exc,
+            )
+            existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
+            if existing is not None:
+                return TenantOut.model_validate(existing, from_attributes=True)
+            continue
+
+        db.add_all([runtime, tenant_secret, config_rev])
         try:
             db.commit()
             break
@@ -109,7 +129,7 @@ async def setup_tenant(
             db.rollback()
             last_integrity_error = exc
             logger.warning(
-                "Tenant setup integrity conflict for user_id=%s on attempt=%s: %s",
+                "Tenant setup integrity conflict for user_id=%s on attempt=%s stage=child_commit: %s",
                 user.id,
                 _attempt + 1,
                 exc,
@@ -129,6 +149,7 @@ async def setup_tenant(
         ) from last_integrity_error
 
     assert tenant is not None
+    assert runtime is not None
     db.refresh(tenant)
 
     payload = {
