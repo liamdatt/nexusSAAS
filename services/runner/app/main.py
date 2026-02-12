@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.monitor import TenantMonitor
 from app.publisher import EventPublisher
 from app.runtime_manager import RuntimeErrorManager, RuntimeManager
-from app.schemas import ApplyConfigRequest, GenericResponse, HealthResponse, ProvisionRequest
+from app.schemas import ApplyConfigRequest, GenericResponse, HealthResponse, ProvisionRequest, RuntimeActionRequest
 
 
 settings = get_settings()
@@ -27,6 +27,7 @@ def _runtime_http_error(exc: RuntimeErrorManager) -> HTTPException:
         "invalid_tenant_id": status.HTTP_400_BAD_REQUEST,
         "invalid_tenant_path": status.HTTP_400_BAD_REQUEST,
         "invalid_config_item": status.HTTP_400_BAD_REQUEST,
+        "nexus_image_invalid": status.HTTP_400_BAD_REQUEST,
         "unsafe_path": status.HTTP_400_BAD_REQUEST,
         "tenant_not_found": status.HTTP_404_NOT_FOUND,
         "compose_missing": status.HTTP_404_NOT_FOUND,
@@ -128,6 +129,8 @@ async def provision_tenant(
     try:
         runtime_manager.validate_tenant_id(tenant_id)
         image = body.nexus_image or settings.nexus_image
+        image = runtime_manager.validate_nexus_image(image)
+        runtime_manager.ensure_nexus_image_available(image)
         runtime_manager.write_compose(tenant_id=tenant_id, image=image)
         runtime_env = dict(body.runtime_env)
         runtime_env["BRIDGE_SHARED_SECRET"] = body.bridge_shared_secret
@@ -143,10 +146,14 @@ async def provision_tenant(
 
 
 @app.post("/internal/tenants/{tenant_id}/start", response_model=GenericResponse)
-async def start_tenant(tenant_id: str, authorization: str | None = Header(default=None)) -> GenericResponse:
+async def start_tenant(
+    tenant_id: str,
+    body: RuntimeActionRequest | None = None,
+    authorization: str | None = Header(default=None),
+) -> GenericResponse:
     require_internal_auth(tenant_id, "start", authorization)
     try:
-        runtime_manager.compose_start(tenant_id)
+        runtime_manager.compose_start(tenant_id, nexus_image=body.nexus_image if body else None)
         await monitor.start(tenant_id)
         await publisher.publish(tenant_id, "runtime.status", {"state": "running"})
     except RuntimeErrorManager as exc:
@@ -168,10 +175,14 @@ async def stop_tenant(tenant_id: str, authorization: str | None = Header(default
 
 
 @app.post("/internal/tenants/{tenant_id}/restart", response_model=GenericResponse)
-async def restart_tenant(tenant_id: str, authorization: str | None = Header(default=None)) -> GenericResponse:
+async def restart_tenant(
+    tenant_id: str,
+    body: RuntimeActionRequest | None = None,
+    authorization: str | None = Header(default=None),
+) -> GenericResponse:
     require_internal_auth(tenant_id, "restart", authorization)
     try:
-        runtime_manager.compose_restart(tenant_id)
+        runtime_manager.compose_restart(tenant_id, nexus_image=body.nexus_image if body else None)
         await monitor.start(tenant_id)
         await publisher.publish(tenant_id, "runtime.status", {"state": "running"})
     except RuntimeErrorManager as exc:
@@ -181,10 +192,14 @@ async def restart_tenant(tenant_id: str, authorization: str | None = Header(defa
 
 
 @app.post("/internal/tenants/{tenant_id}/pair/start", response_model=GenericResponse)
-async def pair_start(tenant_id: str, authorization: str | None = Header(default=None)) -> GenericResponse:
+async def pair_start(
+    tenant_id: str,
+    body: RuntimeActionRequest | None = None,
+    authorization: str | None = Header(default=None),
+) -> GenericResponse:
     require_internal_auth(tenant_id, "pair_start", authorization)
     try:
-        runtime_manager.compose_start(tenant_id)
+        runtime_manager.compose_start(tenant_id, nexus_image=body.nexus_image if body else None)
         await monitor.start(tenant_id)
         await publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
     except RuntimeErrorManager as exc:

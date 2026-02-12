@@ -52,17 +52,17 @@ class RunnerClient:
     async def provision(self, tenant_id: str, payload: dict) -> dict:
         return await self._request("POST", f"/internal/tenants/{tenant_id}/provision", tenant_id, "provision", payload)
 
-    async def start(self, tenant_id: str) -> dict:
-        return await self._request("POST", f"/internal/tenants/{tenant_id}/start", tenant_id, "start")
+    async def start(self, tenant_id: str, payload: dict | None = None) -> dict:
+        return await self._request("POST", f"/internal/tenants/{tenant_id}/start", tenant_id, "start", payload)
 
     async def stop(self, tenant_id: str) -> dict:
         return await self._request("POST", f"/internal/tenants/{tenant_id}/stop", tenant_id, "stop")
 
-    async def restart(self, tenant_id: str) -> dict:
-        return await self._request("POST", f"/internal/tenants/{tenant_id}/restart", tenant_id, "restart")
+    async def restart(self, tenant_id: str, payload: dict | None = None) -> dict:
+        return await self._request("POST", f"/internal/tenants/{tenant_id}/restart", tenant_id, "restart", payload)
 
-    async def pair_start(self, tenant_id: str) -> dict:
-        return await self._request("POST", f"/internal/tenants/{tenant_id}/pair/start", tenant_id, "pair_start")
+    async def pair_start(self, tenant_id: str, payload: dict | None = None) -> dict:
+        return await self._request("POST", f"/internal/tenants/{tenant_id}/pair/start", tenant_id, "pair_start", payload)
 
     async def disconnect(self, tenant_id: str) -> dict:
         return await self._request(

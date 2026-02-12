@@ -50,3 +50,12 @@ def test_runner_requires_bearer_token() -> None:
     resp = client.post("/internal/tenants/abc123/start")
     assert resp.status_code == 401
     assert resp.json()["detail"]["error"] == "missing_bearer_token"
+
+
+def test_runner_requires_bearer_token_with_optional_body() -> None:
+    resp = client.post(
+        "/internal/tenants/abc123/start",
+        json={"nexus_image": "ghcr.io/test/nexus-runtime:test"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "missing_bearer_token"

@@ -8,6 +8,7 @@ import pytest
 os.environ["DATABASE_URL"] = "sqlite:///./test_control_plane.db"
 os.environ["CONTROL_AUTO_CREATE_SCHEMA"] = "true"
 os.environ["REDIS_URL"] = "redis://127.0.0.1:6399/0"
+os.environ["NEXUS_IMAGE"] = "ghcr.io/test/nexus-runtime:test"
 if os.path.exists("./test_control_plane.db"):
     os.remove("./test_control_plane.db")
 

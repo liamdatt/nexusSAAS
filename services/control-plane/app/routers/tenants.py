@@ -33,6 +33,7 @@ runner = RunnerClient()
 cipher = SecretCipher()
 logger = logging.getLogger(__name__)
 OPENROUTER_API_KEY = "NEXUS_OPENROUTER_API_KEY"
+NEXUS_IMAGE_PLACEHOLDERS = ("replace_with", "your-org", "<org>")
 
 
 def _openrouter_key_required_error() -> HTTPException:
@@ -61,6 +62,19 @@ def _require_openrouter_api_key(db: Session, tenant_id: str) -> None:
     if active is None or not _has_openrouter_api_key(active.env_json):
         raise _openrouter_key_required_error()
 
+
+def _require_valid_nexus_image(request: Request) -> str:
+    image = str(request.app.state.settings.nexus_image or "").strip()
+    lowered = image.lower()
+    if not image or any(marker in lowered for marker in NEXUS_IMAGE_PLACEHOLDERS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "nexus_image_invalid",
+                "message": "Control-plane NEXUS_IMAGE is not set to a valid runtime tag",
+            },
+        )
+    return image
 
 
 def _tenant_for_owner(db: Session, tenant_id: str, owner_user_id: int) -> Tenant:
@@ -100,6 +114,7 @@ async def setup_tenant(
     existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
     if existing is not None:
         return TenantOut.model_validate(existing, from_attributes=True)
+    nexus_image = _require_valid_nexus_image(request)
 
     initial_env = {
         "NEXUS_CLI_ENABLED": "false",
@@ -184,7 +199,7 @@ async def setup_tenant(
 
     payload = {
         "tenant_id": tenant_id,
-        "nexus_image": request.app.state.settings.nexus_image,
+        "nexus_image": nexus_image,
         "runtime_env": initial_env,
         "bridge_shared_secret": bridge_secret,
     }
@@ -249,7 +264,8 @@ async def start_tenant_runtime(
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
     _require_openrouter_api_key(db, tenant_id)
-    await _runner_call(request, tenant_id, "start", lambda: runner.start(tenant_id))
+    nexus_image = _require_valid_nexus_image(request)
+    await _runner_call(request, tenant_id, "start", lambda: runner.start(tenant_id, {"nexus_image": nexus_image}))
     runtime = _runtime_for_tenant(db, tenant_id)
     runtime.desired_state = "running"
     runtime.actual_state = "running"
@@ -286,7 +302,10 @@ async def restart_tenant_runtime(
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
     _require_openrouter_api_key(db, tenant_id)
-    await _runner_call(request, tenant_id, "restart", lambda: runner.restart(tenant_id))
+    nexus_image = _require_valid_nexus_image(request)
+    await _runner_call(
+        request, tenant_id, "restart", lambda: runner.restart(tenant_id, {"nexus_image": nexus_image})
+    )
     runtime = _runtime_for_tenant(db, tenant_id)
     runtime.desired_state = "running"
     runtime.actual_state = "running"
@@ -305,7 +324,10 @@ async def pair_start(
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
     _require_openrouter_api_key(db, tenant_id)
-    await _runner_call(request, tenant_id, "pair_start", lambda: runner.pair_start(tenant_id))
+    nexus_image = _require_valid_nexus_image(request)
+    await _runner_call(
+        request, tenant_id, "pair_start", lambda: runner.pair_start(tenant_id, {"nexus_image": nexus_image})
+    )
     runtime = _runtime_for_tenant(db, tenant_id)
     runtime.desired_state = "pending_pairing"
     runtime.actual_state = "pending_pairing"

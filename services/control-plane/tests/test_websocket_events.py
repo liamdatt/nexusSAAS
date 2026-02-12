@@ -8,6 +8,7 @@ from pathlib import Path
 os.environ["DATABASE_URL"] = "sqlite:///./test_control_plane_ws.db"
 os.environ["CONTROL_AUTO_CREATE_SCHEMA"] = "true"
 os.environ["REDIS_URL"] = "redis://127.0.0.1:6399/0"
+os.environ["NEXUS_IMAGE"] = "ghcr.io/test/nexus-runtime:test"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,16 +26,16 @@ class DummyRunner:
     async def provision(self, tenant_id: str, payload: dict) -> dict:
         return {"tenant_id": tenant_id, "ok": True}
 
-    async def start(self, tenant_id: str) -> dict:
+    async def start(self, tenant_id: str, payload: dict | None = None) -> dict:
         return {"tenant_id": tenant_id, "ok": True}
 
     async def stop(self, tenant_id: str) -> dict:
         return {"tenant_id": tenant_id, "ok": True}
 
-    async def restart(self, tenant_id: str) -> dict:
+    async def restart(self, tenant_id: str, payload: dict | None = None) -> dict:
         return {"tenant_id": tenant_id, "ok": True}
 
-    async def pair_start(self, tenant_id: str) -> dict:
+    async def pair_start(self, tenant_id: str, payload: dict | None = None) -> dict:
         return {"tenant_id": tenant_id, "ok": True}
 
     async def disconnect(self, tenant_id: str) -> dict:

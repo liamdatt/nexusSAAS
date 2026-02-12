@@ -25,6 +25,7 @@ class RuntimeManager:
     CONFIG_ITEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     LEGACY_CONFIG_RO_MOUNT = ":/data/config:ro"
     CONFIG_RW_MOUNT = ":/data/config"
+    NEXUS_IMAGE_PLACEHOLDERS = ("replace_with", "your-org", "<org>")
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -201,6 +202,54 @@ class RuntimeManager:
         except OSError as exc:
             raise RuntimeErrorManager("docker_unavailable", f"command_exec_error args={args} error={exc}") from exc
 
+    def _run_capture(self, args: list[str]) -> tuple[int, str]:
+        try:
+            proc = subprocess.run(args, check=False, capture_output=True, text=True)
+            output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+            return proc.returncode, output
+        except OSError as exc:
+            raise RuntimeErrorManager("docker_unavailable", f"command_exec_error args={args} error={exc}") from exc
+
+    def validate_nexus_image(self, nexus_image: str) -> str:
+        image = nexus_image.strip()
+        lowered = image.lower()
+        if not image or any(marker in lowered for marker in self.NEXUS_IMAGE_PLACEHOLDERS):
+            raise RuntimeErrorManager(
+                "nexus_image_invalid",
+                "NEXUS_IMAGE is not set to a valid runtime image tag",
+            )
+        return image
+
+    def ensure_nexus_image_available(self, nexus_image: str) -> None:
+        inspect_args = ["docker", "image", "inspect", nexus_image]
+        inspect_rc, _ = self._run_capture(inspect_args)
+        if inspect_rc == 0:
+            return
+
+        manifest_args = ["docker", "manifest", "inspect", nexus_image]
+        manifest_rc, manifest_out = self._run_capture(manifest_args)
+        if manifest_rc == 0:
+            return
+
+        lowered = manifest_out.lower()
+        if any(
+            token in lowered
+            for token in (
+                "manifest unknown",
+                "no such manifest",
+                "not found",
+                "name unknown",
+                "pull access denied",
+                "unauthorized",
+            )
+        ):
+            raise RuntimeErrorManager("nexus_image_invalid", f"Runtime image is not available: {nexus_image}")
+
+        raise RuntimeErrorManager(
+            "docker_command_failed",
+            f"command_failed args={manifest_args} output={manifest_out}",
+        )
+
     def docker_available(self) -> tuple[bool, str]:
         try:
             out = self._run(["docker", "info", "--format", "{{.ServerVersion}}"])
@@ -221,22 +270,37 @@ class RuntimeManager:
                 tenant_ids.append(tenant_id)
         return sorted(set(tenant_ids))
 
-    def compose_up(self, tenant_id: str) -> None:
+    def compose_up(self, tenant_id: str, nexus_image: str | None = None) -> None:
         self.validate_layout(tenant_id, require_existing=False)
+        if nexus_image:
+            image = self.validate_nexus_image(nexus_image)
+            self.ensure_nexus_image_available(image)
         self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d"])
 
-    def compose_start(self, tenant_id: str) -> None:
+    def compose_start(self, tenant_id: str, nexus_image: str | None = None) -> None:
         self.validate_layout(tenant_id, require_existing=True)
         if self._migrate_legacy_config_mount(tenant_id):
             logger.info("Updated legacy compose config mount to read-write for tenant_id=%s", tenant_id)
+        if nexus_image:
+            image = self.validate_nexus_image(nexus_image)
+            self.ensure_nexus_image_available(image)
+            if self._migrate_compose_image(tenant_id, image):
+                logger.info("Updated tenant compose image for tenant_id=%s image=%s", tenant_id, image)
         self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d"])
 
     def compose_stop(self, tenant_id: str) -> None:
         self.validate_layout(tenant_id, require_existing=True)
         self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "stop"])
 
-    def compose_restart(self, tenant_id: str) -> None:
+    def compose_restart(self, tenant_id: str, nexus_image: str | None = None) -> None:
         self.validate_layout(tenant_id, require_existing=True)
+        if nexus_image:
+            image = self.validate_nexus_image(nexus_image)
+            self.ensure_nexus_image_available(image)
+            if self._migrate_compose_image(tenant_id, image):
+                logger.info("Updated tenant compose image for tenant_id=%s image=%s", tenant_id, image)
+            self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d"])
+            return
         self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "restart"])
 
     def compose_down(self, tenant_id: str, remove_volumes: bool = False) -> None:
@@ -277,5 +341,64 @@ class RuntimeManager:
         if updated == original:
             return False
 
+        compose_path.write_text(updated, encoding="utf-8")
+        return True
+
+    def _migrate_compose_image(self, tenant_id: str, nexus_image: str) -> bool:
+        compose_path = self.compose_file(tenant_id)
+        original = compose_path.read_text(encoding="utf-8")
+        lines = original.splitlines()
+
+        in_services = False
+        services_indent = -1
+        in_runtime = False
+        runtime_indent = -1
+        image_line_index: int | None = None
+        image_line_indent = 0
+
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            indent = len(line) - len(line.lstrip(" "))
+
+            if stripped == "services:":
+                in_services = True
+                services_indent = indent
+                in_runtime = False
+                continue
+
+            if in_services and indent <= services_indent:
+                in_services = False
+                in_runtime = False
+
+            if not in_services:
+                continue
+
+            if stripped == "runtime:" and indent > services_indent:
+                in_runtime = True
+                runtime_indent = indent
+                continue
+
+            if in_runtime and indent <= runtime_indent:
+                in_runtime = False
+
+            if in_runtime and stripped.startswith("image:"):
+                image_line_index = idx
+                image_line_indent = indent
+                break
+
+        if image_line_index is None:
+            return False
+
+        desired = f"{' ' * image_line_indent}image: {nexus_image}"
+        if lines[image_line_index] == desired:
+            return False
+
+        lines[image_line_index] = desired
+        updated = "\n".join(lines)
+        if original.endswith("\n"):
+            updated += "\n"
         compose_path.write_text(updated, encoding="utf-8")
         return True

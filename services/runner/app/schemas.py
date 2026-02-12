@@ -12,6 +12,10 @@ class ProvisionRequest(BaseModel):
     bridge_shared_secret: str
 
 
+class RuntimeActionRequest(BaseModel):
+    nexus_image: str | None = None
+
+
 class PromptPayload(BaseModel):
     name: str
     content: str

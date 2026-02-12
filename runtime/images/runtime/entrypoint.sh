@@ -11,6 +11,16 @@ BRIDGE_DIR="${NEXUS_BRIDGE_DIR:-${DATA_DIR}/bridge}"
 ONBOARDED_MARKER="${DATA_DIR}/.onboarded"
 BRIDGE_TSX_BIN="${BRIDGE_DIR}/node_modules/.bin/tsx"
 
+bridge_ready() {
+  if [ ! -d "${BRIDGE_DIR}" ]; then
+    return 1
+  fi
+  if [ -x "${BRIDGE_TSX_BIN}" ]; then
+    return 0
+  fi
+  command -v tsx >/dev/null 2>&1
+}
+
 mkdir -p "${CONFIG_DIR}"
 mkdir -p "${DATA_DIR}"
 mkdir -p "${PROMPTS_DIR}"
@@ -19,7 +29,7 @@ mkdir -p "${SKILLS_DIR}"
 needs_onboard=0
 if [ ! -f "${ONBOARDED_MARKER}" ]; then
   needs_onboard=1
-elif [ ! -x "${BRIDGE_TSX_BIN}" ]; then
+elif ! bridge_ready; then
   echo "[nexus] onboarding marker exists but bridge dependencies are missing; rerunning onboarding..."
   needs_onboard=1
 fi
@@ -33,6 +43,11 @@ if [ "${needs_onboard}" -eq 1 ]; then
     echo "[nexus] onboarding failed; refusing to start runtime."
     exit 1
   fi
+fi
+
+if ! bridge_ready; then
+  echo "[nexus] bridge runtime dependencies are still missing after onboarding; refusing to start runtime."
+  exit 1
 fi
 
 exec nexus start

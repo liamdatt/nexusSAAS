@@ -7,6 +7,7 @@ from pathlib import Path
 os.environ["DATABASE_URL"] = "sqlite:///./test_control_plane_contracts.db"
 os.environ["CONTROL_AUTO_CREATE_SCHEMA"] = "true"
 os.environ["REDIS_URL"] = "redis://127.0.0.1:6399/0"
+os.environ["NEXUS_IMAGE"] = "ghcr.io/test/nexus-runtime:test"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,20 +25,28 @@ if DB_PATH.exists():
 class DummyRunner:
     def __init__(self) -> None:
         self.fail_apply_config = False
+        self.provision_payloads: list[dict] = []
+        self.start_payloads: list[dict | None] = []
+        self.restart_payloads: list[dict | None] = []
+        self.pair_start_payloads: list[dict | None] = []
 
     async def provision(self, tenant_id: str, payload: dict) -> dict:
+        self.provision_payloads.append(payload)
         return {"tenant_id": tenant_id, "ok": True}
 
-    async def start(self, tenant_id: str) -> dict:
+    async def start(self, tenant_id: str, payload: dict | None = None) -> dict:
+        self.start_payloads.append(payload)
         return {"tenant_id": tenant_id, "ok": True}
 
     async def stop(self, tenant_id: str) -> dict:
         return {"tenant_id": tenant_id, "ok": True}
 
-    async def restart(self, tenant_id: str) -> dict:
+    async def restart(self, tenant_id: str, payload: dict | None = None) -> dict:
+        self.restart_payloads.append(payload)
         return {"tenant_id": tenant_id, "ok": True}
 
-    async def pair_start(self, tenant_id: str) -> dict:
+    async def pair_start(self, tenant_id: str, payload: dict | None = None) -> dict:
+        self.pair_start_payloads.append(payload)
         return {"tenant_id": tenant_id, "ok": True}
 
     async def disconnect(self, tenant_id: str) -> dict:
@@ -57,6 +66,11 @@ tenants.runner = DummyRunner()
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
+    tenants.runner.fail_apply_config = False
+    tenants.runner.provision_payloads.clear()
+    tenants.runner.start_payloads.clear()
+    tenants.runner.restart_payloads.clear()
+    tenants.runner.pair_start_payloads.clear()
     with TestClient(app) as c:
         yield c
 
@@ -101,6 +115,9 @@ def test_control_plane_routes_contract_and_auth(client: TestClient) -> None:
         ).status_code
         == 200
     )
+    assert tenants.runner.start_payloads[-1] == {"nexus_image": os.environ["NEXUS_IMAGE"]}
+    assert tenants.runner.restart_payloads[-1] == {"nexus_image": os.environ["NEXUS_IMAGE"]}
+    assert tenants.runner.pair_start_payloads[-1] == {"nexus_image": os.environ["NEXUS_IMAGE"]}
 
     assert client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"}).status_code == 200
     assert (
@@ -196,6 +213,41 @@ def test_start_restart_pair_require_openrouter_api_key(client: TestClient) -> No
     assert start_resp.json()["detail"]["error"] == "openrouter_api_key_required"
     assert restart_resp.json()["detail"]["error"] == "openrouter_api_key_required"
     assert pair_resp.json()["detail"]["error"] == "openrouter_api_key_required"
+
+
+def test_setup_rejects_invalid_nexus_image_config(client: TestClient) -> None:
+    original_image = app.state.settings.nexus_image
+    app.state.settings.nexus_image = "ghcr.io/your-org/nexus-runtime:sha-REPLACE_WITH_COMMIT"
+    try:
+        user = _signup(client, "contracts-invalid-image-setup@example.com")
+        token = user["tokens"]["access_token"]
+        setup = client.post(
+            "/v1/tenants/setup",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"initial_config": {"NEXUS_OPENROUTER_API_KEY": "sk-contract-test"}},
+        )
+        assert setup.status_code == 400
+        assert setup.json()["detail"]["error"] == "nexus_image_invalid"
+    finally:
+        app.state.settings.nexus_image = original_image
+
+
+def test_runtime_start_rejects_invalid_nexus_image_config(client: TestClient) -> None:
+    user = _signup(client, "contracts-invalid-image-start@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    original_image = app.state.settings.nexus_image
+    app.state.settings.nexus_image = "ghcr.io/your-org/nexus-runtime:sha-REPLACE_WITH_COMMIT"
+    try:
+        start_resp = client.post(
+            f"/v1/tenants/{tenant_id}/runtime/start",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert start_resp.status_code == 400
+        assert start_resp.json()["detail"]["error"] == "nexus_image_invalid"
+    finally:
+        app.state.settings.nexus_image = original_image
 
 
 def test_config_patch_values_persist(client: TestClient) -> None:

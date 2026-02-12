@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.config import get_settings
 from app.runtime_manager import RuntimeErrorManager, RuntimeManager
+
+
+def _proc(returncode: int = 0, stdout: str = "", stderr: str = "") -> Mock:
+    proc = Mock()
+    proc.returncode = returncode
+    proc.stdout = stdout
+    proc.stderr = stderr
+    return proc
 
 
 def test_runtime_files_render(tmp_path: Path, monkeypatch) -> None:
@@ -122,6 +130,116 @@ def test_compose_start_migrates_legacy_config_mount_to_rw(tmp_path: Path, monkey
     args = run_mock.call_args.args[0]
     assert args[:4] == ["docker", "compose", "-f", str(manager.compose_file("abc123"))]
     assert args[4:] == ["up", "-d"]
+
+
+def test_compose_start_migrates_compose_image_when_provided(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.ensure_layout("abc123")
+    manager.compose_file("abc123").write_text(
+        "services:\n"
+        "  runtime:\n"
+        "    image: ghcr.io/test/old:1\n",
+        encoding="utf-8",
+    )
+
+    with patch("app.runtime_manager.subprocess.run") as run_mock:
+        run_mock.side_effect = [_proc(returncode=0), _proc(returncode=0)]
+        manager.compose_start("abc123", nexus_image="ghcr.io/test/new:2")
+
+    rendered = manager.compose_file("abc123").read_text(encoding="utf-8")
+    assert "image: ghcr.io/test/new:2" in rendered
+    assert "image: ghcr.io/test/old:1" not in rendered
+    first_call = run_mock.call_args_list[0].args[0]
+    second_call = run_mock.call_args_list[1].args[0]
+    assert first_call == ["docker", "image", "inspect", "ghcr.io/test/new:2"]
+    assert second_call[:4] == ["docker", "compose", "-f", str(manager.compose_file("abc123"))]
+    assert second_call[4:] == ["up", "-d"]
+
+
+def test_compose_restart_with_image_uses_up_detached(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.ensure_layout("abc123")
+    manager.compose_file("abc123").write_text(
+        "services:\n"
+        "  runtime:\n"
+        "    image: ghcr.io/test/old:1\n",
+        encoding="utf-8",
+    )
+
+    with patch("app.runtime_manager.subprocess.run") as run_mock:
+        run_mock.side_effect = [_proc(returncode=0), _proc(returncode=0)]
+        manager.compose_restart("abc123", nexus_image="ghcr.io/test/new:2")
+
+    second_call = run_mock.call_args_list[1].args[0]
+    assert second_call[:4] == ["docker", "compose", "-f", str(manager.compose_file("abc123"))]
+    assert second_call[4:] == ["up", "-d"]
+
+
+def test_compose_start_rejects_placeholder_nexus_image(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.write_compose("abc123", "ghcr.io/test/image:1")
+
+    try:
+        manager.compose_start("abc123", nexus_image="ghcr.io/your-org/nexus-runtime:sha-REPLACE_WITH_COMMIT")
+        assert False, "expected nexus_image_invalid for placeholder image"
+    except RuntimeErrorManager as exc:
+        assert exc.code == "nexus_image_invalid"
+
+
+def test_compose_start_maps_manifest_missing_to_nexus_image_invalid(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.write_compose("abc123", "ghcr.io/test/image:1")
+
+    with patch("app.runtime_manager.subprocess.run") as run_mock:
+        run_mock.side_effect = [
+            _proc(returncode=1, stderr="Error: No such image"),
+            _proc(returncode=1, stderr="Error response from daemon: manifest unknown"),
+        ]
+        try:
+            manager.compose_start("abc123", nexus_image="ghcr.io/test/new:2")
+            assert False, "expected nexus_image_invalid when manifest is missing"
+        except RuntimeErrorManager as exc:
+            assert exc.code == "nexus_image_invalid"
 
 
 def test_compose_start_requires_existing_compose(tmp_path: Path, monkeypatch) -> None:
