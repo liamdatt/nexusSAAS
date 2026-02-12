@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 
 import websockets
 
 from app.publisher import EventPublisher
 from app.runtime_manager import RuntimeManager
+
+logger = logging.getLogger(__name__)
 
 
 class TenantMonitor:
@@ -50,6 +53,7 @@ class TenantMonitor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                logger.warning("bridge monitor error tenant_id=%s ws_url=%s err=%s", tenant_id, ws_url, exc)
                 await self.publisher.publish(
                     tenant_id,
                     "runtime.error",
@@ -65,11 +69,16 @@ class TenantMonitor:
             await self.publisher.publish(tenant_id, "runtime.log", {"raw": raw})
             return
 
-        event = envelope.get("event")
-        payload = envelope.get("payload") if isinstance(envelope.get("payload"), dict) else {}
+        event = self._normalized_event(envelope)
+        payload = envelope.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        if not payload and "data" in envelope and isinstance(envelope.get("data"), dict):
+            payload = envelope["data"]
 
         if event == "bridge.qr":
-            await self.publisher.publish(tenant_id, "whatsapp.qr", payload)
+            qr_payload = payload or self._extract_qr_payload(envelope)
+            await self.publisher.publish(tenant_id, "whatsapp.qr", qr_payload)
         elif event == "bridge.connected":
             await self.publisher.publish(tenant_id, "whatsapp.connected", payload)
             await self.publisher.publish(tenant_id, "runtime.status", {"state": "running"})
@@ -85,4 +94,35 @@ class TenantMonitor:
         elif event == "bridge.ready":
             await self.publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
         else:
-            await self.publisher.publish(tenant_id, "runtime.log", {"bridge_event": event, "payload": payload})
+            if event and "qr" in event:
+                qr_payload = payload or self._extract_qr_payload(envelope)
+                if qr_payload:
+                    await self.publisher.publish(tenant_id, "whatsapp.qr", qr_payload)
+                    return
+            await self.publisher.publish(
+                tenant_id,
+                "runtime.log",
+                {"bridge_event": event, "payload": payload, "raw_envelope": envelope},
+            )
+
+    def _normalized_event(self, envelope: dict) -> str | None:
+        raw_event = envelope.get("event") or envelope.get("type") or envelope.get("name")
+        if not isinstance(raw_event, str):
+            return None
+        token = raw_event.strip().lower().replace(":", ".").replace("_", ".")
+        aliases = {
+            "whatsapp.qr": "bridge.qr",
+            "bridge.qrcode": "bridge.qr",
+            "bridge.qr.code": "bridge.qr",
+            "bridge.ready.state": "bridge.ready",
+            "bridge.inbound.message": "bridge.inbound_message",
+            "bridge.delivery.receipt": "bridge.delivery_receipt",
+        }
+        return aliases.get(token, token)
+
+    def _extract_qr_payload(self, envelope: dict) -> dict:
+        for key in ("qr", "qr_code", "qrcode", "code"):
+            value = envelope.get(key)
+            if isinstance(value, str) and value:
+                return {"qr": value}
+        return {}
