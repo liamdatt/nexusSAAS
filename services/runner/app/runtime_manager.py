@@ -222,7 +222,7 @@ class RuntimeManager:
 
     def compose_start(self, tenant_id: str) -> None:
         self.validate_layout(tenant_id, require_existing=True)
-        self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "start"])
+        self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d"])
 
     def compose_stop(self, tenant_id: str) -> None:
         self.validate_layout(tenant_id, require_existing=True)
