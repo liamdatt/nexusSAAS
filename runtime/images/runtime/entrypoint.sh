@@ -10,9 +10,21 @@ SKILLS_DIR="${NEXUS_SKILLS_DIR:-/data/config/skills}"
 BRIDGE_DIR="${NEXUS_BRIDGE_DIR:-${DATA_DIR}/bridge}"
 ONBOARDED_MARKER="${DATA_DIR}/.onboarded"
 BRIDGE_TSX_BIN="${BRIDGE_DIR}/node_modules/.bin/tsx"
+BRIDGE_DOTENV_PKG="${BRIDGE_DIR}/node_modules/dotenv/package.json"
+BRIDGE_SERVER_TS="${BRIDGE_DIR}/src/server.ts"
+BRIDGE_PACKAGE_JSON="${BRIDGE_DIR}/package.json"
 
 bridge_ready() {
   if [ ! -d "${BRIDGE_DIR}" ]; then
+    return 1
+  fi
+  if [ ! -f "${BRIDGE_PACKAGE_JSON}" ]; then
+    return 1
+  fi
+  if [ ! -f "${BRIDGE_SERVER_TS}" ]; then
+    return 1
+  fi
+  if [ ! -f "${BRIDGE_DOTENV_PKG}" ]; then
     return 1
   fi
   if [ -x "${BRIDGE_TSX_BIN}" ]; then
