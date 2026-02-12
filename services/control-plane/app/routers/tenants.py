@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -30,6 +31,7 @@ from app.schemas import (
 router = APIRouter(prefix="/v1/tenants", tags=["tenants"])
 runner = RunnerClient()
 cipher = SecretCipher()
+logger = logging.getLogger(__name__)
 
 
 
@@ -71,17 +73,6 @@ async def setup_tenant(
     if existing is not None:
         return TenantOut.model_validate(existing, from_attributes=True)
 
-    tenant_id = secrets.token_hex(8)
-    tenant = Tenant(id=tenant_id, owner_user_id=user.id, status="provisioning", worker_id="worker-1")
-    runtime = TenantRuntime(tenant_id=tenant_id, desired_state="stopped", actual_state="provisioning")
-    bridge_secret = secrets.token_urlsafe(24)
-    secret_blob = cipher.encrypt({"bridge_shared_secret": bridge_secret})
-    tenant_secret = TenantSecret(
-        tenant_id=tenant_id,
-        encrypted_blob=secret_blob,
-        key_version=cipher.key_version,
-    )
-
     initial_env = {
         "NEXUS_CLI_ENABLED": "false",
         "NEXUS_CONFIG_DIR": "/data/config",
@@ -92,20 +83,52 @@ async def setup_tenant(
     if body.initial_config:
         initial_env.update(body.initial_config)
 
-    config_rev = ConfigRevision(tenant_id=tenant_id, revision=1, env_json=initial_env, is_active=True)
+    tenant: Tenant | None = None
+    bridge_secret = ""
+    last_integrity_error: IntegrityError | None = None
+    for _attempt in range(3):
+        tenant_id = secrets.token_hex(8)
+        # Keep worker identifier tenant-scoped to tolerate legacy schemas that enforce uniqueness.
+        worker_id = f"worker-{tenant_id}"
+        tenant = Tenant(id=tenant_id, owner_user_id=user.id, status="provisioning", worker_id=worker_id)
+        runtime = TenantRuntime(tenant_id=tenant_id, desired_state="stopped", actual_state="provisioning")
+        bridge_secret = secrets.token_urlsafe(24)
+        secret_blob = cipher.encrypt({"bridge_shared_secret": bridge_secret})
+        tenant_secret = TenantSecret(
+            tenant_id=tenant_id,
+            encrypted_blob=secret_blob,
+            key_version=cipher.key_version,
+        )
+        config_rev = ConfigRevision(tenant_id=tenant_id, revision=1, env_json=initial_env, is_active=True)
 
-    db.add_all([tenant, runtime, tenant_secret, config_rev])
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
-        if existing is not None:
-            return TenantOut.model_validate(existing, from_attributes=True)
+        db.add_all([tenant, runtime, tenant_secret, config_rev])
+        try:
+            db.commit()
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_integrity_error = exc
+            logger.warning(
+                "Tenant setup integrity conflict for user_id=%s on attempt=%s: %s",
+                user.id,
+                _attempt + 1,
+                exc,
+            )
+            existing = db.scalar(select(Tenant).where(Tenant.owner_user_id == user.id))
+            if existing is not None:
+                return TenantOut.model_validate(existing, from_attributes=True)
+    else:
+        logger.error(
+            "Tenant setup commit failed for user_id=%s after retries. last_error=%s",
+            user.id,
+            last_integrity_error,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": "tenant_setup_conflict", "message": "Could not complete tenant setup"},
-        ) from exc
+        ) from last_integrity_error
+
+    assert tenant is not None
     db.refresh(tenant)
 
     payload = {
