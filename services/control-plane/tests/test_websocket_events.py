@@ -59,7 +59,11 @@ def client() -> Iterator[TestClient]:
 def _signup_and_setup(client: TestClient) -> tuple[str, str]:
     auth = client.post("/v1/auth/signup", json={"email": "ws@example.com", "password": "supersecure123"}).json()
     token = auth["tokens"]["access_token"]
-    setup = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token}"}, json={}).json()
+    setup = client.post(
+        "/v1/tenants/setup",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"initial_config": {"NEXUS_OPENROUTER_API_KEY": "sk-ws-test"}},
+    ).json()
     return token, setup["id"]
 
 

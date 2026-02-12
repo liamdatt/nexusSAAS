@@ -30,7 +30,11 @@ def test_signup_and_setup_is_idempotent(client: TestClient) -> None:
     assert signup_resp.status_code == 200
     access = signup_resp.json()["tokens"]["access_token"]
 
-    setup_1 = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {access}"}, json={})
+    setup_1 = client.post(
+        "/v1/tenants/setup",
+        headers={"Authorization": f"Bearer {access}"},
+        json={"initial_config": {"NEXUS_OPENROUTER_API_KEY": "sk-test-setup"}},
+    )
     # Runner is absent in unit tests so setup can return 200 with status=error after failed provision.
     assert setup_1.status_code == 200
     tenant_id_1 = setup_1.json()["id"]
@@ -38,6 +42,19 @@ def test_signup_and_setup_is_idempotent(client: TestClient) -> None:
     setup_2 = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {access}"}, json={})
     assert setup_2.status_code == 200
     assert setup_2.json()["id"] == tenant_id_1
+
+
+def test_setup_requires_openrouter_key_for_new_tenant(client: TestClient) -> None:
+    signup_resp = client.post(
+        "/v1/auth/signup",
+        json={"email": "user-missing-key@example.com", "password": "supersecure123"},
+    )
+    assert signup_resp.status_code == 200
+    access = signup_resp.json()["tokens"]["access_token"]
+
+    setup_resp = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {access}"}, json={})
+    assert setup_resp.status_code == 400
+    assert setup_resp.json()["detail"]["error"] == "openrouter_api_key_required"
 
 
 def test_rapid_repeated_setup_calls_return_same_tenant(client: TestClient) -> None:
@@ -48,11 +65,16 @@ def test_rapid_repeated_setup_calls_return_same_tenant(client: TestClient) -> No
     assert signup_resp.status_code == 200
     access = signup_resp.json()["tokens"]["access_token"]
 
-    tenant_id: str | None = None
+    first = client.post(
+        "/v1/tenants/setup",
+        headers={"Authorization": f"Bearer {access}"},
+        json={"initial_config": {"NEXUS_OPENROUTER_API_KEY": "sk-test-repeat"}},
+    )
+    assert first.status_code == 200
+    tenant_id = first.json()["id"]
+
     for _ in range(10):
         setup_resp = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {access}"}, json={})
         assert setup_resp.status_code == 200
         body = setup_resp.json()
-        if tenant_id is None:
-            tenant_id = body["id"]
         assert body["id"] == tenant_id

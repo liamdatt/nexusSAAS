@@ -49,6 +49,7 @@ export default function Home() {
   const [tenantId, setTenantId] = useState("");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [configText, setConfigText] = useState("{}");
+  const [configEnv, setConfigEnv] = useState<Record<string, string>>({});
   const [promptName, setPromptName] = useState("system");
   const [promptContent, setPromptContent] = useState("You are Nexus.");
   const [skillId, setSkillId] = useState("default");
@@ -56,6 +57,8 @@ export default function Home() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
+  const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const tenantBootstrapAttemptedToken = useRef<string | null>(null);
@@ -66,9 +69,12 @@ export default function Home() {
     setTenantId("");
     setStatus(null);
     setConfigText("{}");
+    setConfigEnv({});
     setPrompts([]);
     setSkills([]);
     setEvents([]);
+    setOpenrouterKeyInput("");
+    setRequiresOpenRouterKey(false);
     setError("");
     tenantBootstrapAttemptedToken.current = null;
   }
@@ -146,13 +152,17 @@ export default function Home() {
     }
   }
 
-  async function loadTenant(token: string) {
+  async function loadTenant(token: string, openrouterApiKey?: string) {
     try {
+      const setupPayload = openrouterApiKey
+        ? { initial_config: { NEXUS_OPENROUTER_API_KEY: openrouterApiKey } }
+        : {};
       const data = await api<{ id: string }>(
         "/v1/tenants/setup",
-        { method: "POST", body: JSON.stringify({}) },
+        { method: "POST", body: JSON.stringify(setupPayload) },
         token,
       );
+      setRequiresOpenRouterKey(false);
       setTenantId(data.id);
       await fetchStatus(data.id, token);
       await loadConfig(data.id, token);
@@ -164,11 +174,17 @@ export default function Home() {
         const detail = JSON.parse(msg);
         if (detail?.detail?.tenant_id) {
           const existingId = detail.detail.tenant_id;
+          setRequiresOpenRouterKey(false);
           setTenantId(existingId);
           await fetchStatus(existingId, token);
           await loadConfig(existingId, token);
           await loadPrompts(existingId, token);
           await loadSkills(existingId, token);
+          return;
+        }
+        if (detail?.detail?.error === "openrouter_api_key_required") {
+          setRequiresOpenRouterKey(true);
+          setError("");
           return;
         }
       } catch {
@@ -183,6 +199,19 @@ export default function Home() {
     setBusy(true);
     setError("");
     await loadTenant(tokens.access_token);
+    setBusy(false);
+  }
+
+  async function setupTenantWithKey() {
+    if (!tokens) return;
+    const trimmed = openrouterKeyInput.trim();
+    if (!trimmed) {
+      setError("OpenRouter API key is required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    await loadTenant(tokens.access_token, trimmed);
     setBusy(false);
   }
 
@@ -201,8 +230,10 @@ export default function Home() {
     if (!id || !token) return;
     try {
       const data = await api<ConfigResponse>(`/v1/tenants/${id}/config`, {}, token);
+      setConfigEnv(data.env_json);
       setConfigText(JSON.stringify(data.env_json, null, 2));
     } catch {
+      setConfigEnv({});
       setConfigText("{}");
     }
   }
@@ -311,6 +342,11 @@ export default function Home() {
     return "badge";
   }, [status]);
 
+  const hasOpenRouterKey = useMemo(() => {
+    const value = configEnv.NEXUS_OPENROUTER_API_KEY;
+    return Boolean(value && String(value).trim());
+  }, [configEnv]);
+
   return (
     <main className="container">
       <section className="card" style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -378,6 +414,21 @@ export default function Home() {
                     Refresh
                   </button>
                 </>
+              ) : requiresOpenRouterKey ? (
+                <div style={{ width: "100%" }}>
+                  <label>OpenRouter API Key (required)</label>
+                  <input
+                    type="password"
+                    value={openrouterKeyInput}
+                    onChange={(e) => setOpenrouterKeyInput(e.target.value)}
+                    placeholder="sk-or-v1-..."
+                  />
+                  <div className="row" style={{ marginTop: "0.65rem" }}>
+                    <button className="primary" onClick={setupTenantWithKey} disabled={busy || !openrouterKeyInput.trim()}>
+                      Create Bot
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <button className="primary" onClick={setupTenant} disabled={busy}>
                   Create Bot
@@ -389,12 +440,17 @@ export default function Home() {
               Runtime: <span className={statusClass}>{status?.actual_state ?? "unknown"}</span>
             </p>
             <div className="row" style={{ marginBottom: "1rem" }}>
-              <button className="secondary" disabled={busy || !tenantId} onClick={() => void runOperation("start")}>Start</button>
+              <button className="secondary" disabled={busy || !tenantId || !hasOpenRouterKey} onClick={() => void runOperation("start")}>Start</button>
               <button className="secondary" disabled={busy || !tenantId} onClick={() => void runOperation("stop")}>Stop</button>
-              <button className="secondary" disabled={busy || !tenantId} onClick={() => void runOperation("restart")}>Restart</button>
-              <button className="primary" disabled={busy || !tenantId} onClick={() => void runOperation("pair/start")}>Pair WhatsApp</button>
+              <button className="secondary" disabled={busy || !tenantId || !hasOpenRouterKey} onClick={() => void runOperation("restart")}>Restart</button>
+              <button className="primary" disabled={busy || !tenantId || !hasOpenRouterKey} onClick={() => void runOperation("pair/start")}>Pair WhatsApp</button>
               <button className="warn" disabled={busy || !tenantId} onClick={() => void runOperation("whatsapp/disconnect")}>Disconnect WhatsApp</button>
             </div>
+            {tenantId && !hasOpenRouterKey && (
+              <p style={{ marginTop: "-0.35rem", color: "var(--danger)" }}>
+                Set <span className="mono">NEXUS_OPENROUTER_API_KEY</span> in Runtime Config and save before Start, Restart, or Pair WhatsApp.
+              </p>
+            )}
 
             <h3>Live Events</h3>
             <div className="events mono">

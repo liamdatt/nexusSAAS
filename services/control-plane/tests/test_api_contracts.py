@@ -67,13 +67,21 @@ def _signup(client: TestClient, email: str) -> dict:
     return resp.json()
 
 
+def _setup_tenant(client: TestClient, token: str) -> str:
+    resp = client.post(
+        "/v1/tenants/setup",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"initial_config": {"NEXUS_OPENROUTER_API_KEY": "sk-contract-test"}},
+    )
+    assert resp.status_code == 200
+    return resp.json()["id"]
+
+
 def test_control_plane_routes_contract_and_auth(client: TestClient) -> None:
     user = _signup(client, "contracts-a@example.com")
     token = user["tokens"]["access_token"]
 
-    setup = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token}"}, json={})
-    assert setup.status_code == 200
-    tenant_id = setup.json()["id"]
+    tenant_id = _setup_tenant(client, token)
     setup_status = client.get(f"/v1/tenants/{tenant_id}/status", headers={"Authorization": f"Bearer {token}"})
     assert setup_status.status_code == 200
     assert setup_status.json()["actual_state"] == "pending_pairing"
@@ -130,7 +138,7 @@ def test_control_plane_routes_contract_and_auth(client: TestClient) -> None:
 def test_cross_tenant_isolation(client: TestClient) -> None:
     user_a = _signup(client, "isolation-a@example.com")
     token_a = user_a["tokens"]["access_token"]
-    tenant_a = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token_a}"}, json={}).json()["id"]
+    tenant_a = _setup_tenant(client, token_a)
 
     user_b = _signup(client, "isolation-b@example.com")
     token_b = user_b["tokens"]["access_token"]
@@ -142,7 +150,7 @@ def test_cross_tenant_isolation(client: TestClient) -> None:
 def test_config_revision_activation_only_on_successful_apply(client: TestClient) -> None:
     user = _signup(client, "contracts-config@example.com")
     token = user["tokens"]["access_token"]
-    tenant_id = client.post("/v1/tenants/setup", headers={"Authorization": f"Bearer {token}"}, json={}).json()["id"]
+    tenant_id = _setup_tenant(client, token)
 
     tenants.runner.fail_apply_config = True
     try:
@@ -158,3 +166,33 @@ def test_config_revision_activation_only_on_successful_apply(client: TestClient)
     config = client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"})
     assert config.status_code == 200
     assert config.json()["revision"] == 1
+
+
+def test_start_restart_pair_require_openrouter_api_key(client: TestClient) -> None:
+    user = _signup(client, "contracts-openrouter@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    remove_key = client.patch(
+        f"/v1/tenants/{tenant_id}/config",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"values": {"NEXUS_OPENROUTER_API_KEY": ""}},
+    )
+    assert remove_key.status_code == 200
+
+    start_resp = client.post(f"/v1/tenants/{tenant_id}/runtime/start", headers={"Authorization": f"Bearer {token}"})
+    restart_resp = client.post(
+        f"/v1/tenants/{tenant_id}/runtime/restart",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    pair_resp = client.post(
+        f"/v1/tenants/{tenant_id}/whatsapp/pair/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert start_resp.status_code == 400
+    assert restart_resp.status_code == 400
+    assert pair_resp.status_code == 400
+    assert start_resp.json()["detail"]["error"] == "openrouter_api_key_required"
+    assert restart_resp.json()["detail"]["error"] == "openrouter_api_key_required"
+    assert pair_resp.json()["detail"]["error"] == "openrouter_api_key_required"

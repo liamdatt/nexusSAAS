@@ -32,6 +32,34 @@ router = APIRouter(prefix="/v1/tenants", tags=["tenants"])
 runner = RunnerClient()
 cipher = SecretCipher()
 logger = logging.getLogger(__name__)
+OPENROUTER_API_KEY = "NEXUS_OPENROUTER_API_KEY"
+
+
+def _openrouter_key_required_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "error": "openrouter_api_key_required",
+            "message": "NEXUS_OPENROUTER_API_KEY is required before runtime start",
+        },
+    )
+
+
+def _has_openrouter_api_key(env_json: dict | None) -> bool:
+    if not isinstance(env_json, dict):
+        return False
+    value = env_json.get(OPENROUTER_API_KEY)
+    if value is None:
+        return False
+    return bool(str(value).strip())
+
+
+def _require_openrouter_api_key(db: Session, tenant_id: str) -> None:
+    active = db.scalar(
+        select(ConfigRevision).where(ConfigRevision.tenant_id == tenant_id, ConfigRevision.is_active.is_(True))
+    )
+    if active is None or not _has_openrouter_api_key(active.env_json):
+        raise _openrouter_key_required_error()
 
 
 
@@ -82,6 +110,8 @@ async def setup_tenant(
     }
     if body.initial_config:
         initial_env.update(body.initial_config)
+    if not _has_openrouter_api_key(initial_env):
+        raise _openrouter_key_required_error()
 
     tenant: Tenant | None = None
     runtime: TenantRuntime | None = None
@@ -218,6 +248,7 @@ async def start_tenant_runtime(
     user: User = Depends(get_current_user),
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
+    _require_openrouter_api_key(db, tenant_id)
     await _runner_call(request, tenant_id, "start", lambda: runner.start(tenant_id))
     runtime = _runtime_for_tenant(db, tenant_id)
     runtime.desired_state = "running"
@@ -254,6 +285,7 @@ async def restart_tenant_runtime(
     user: User = Depends(get_current_user),
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
+    _require_openrouter_api_key(db, tenant_id)
     await _runner_call(request, tenant_id, "restart", lambda: runner.restart(tenant_id))
     runtime = _runtime_for_tenant(db, tenant_id)
     runtime.desired_state = "running"
@@ -272,6 +304,7 @@ async def pair_start(
     user: User = Depends(get_current_user),
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
+    _require_openrouter_api_key(db, tenant_id)
     await _runner_call(request, tenant_id, "pair_start", lambda: runner.pair_start(tenant_id))
     runtime = _runtime_for_tenant(db, tenant_id)
     runtime.desired_state = "pending_pairing"
