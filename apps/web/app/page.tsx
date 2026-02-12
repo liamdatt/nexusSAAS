@@ -59,6 +59,18 @@ export default function Home() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    setTokens(null);
+    setTenantId("");
+    setStatus(null);
+    setConfigText("{}");
+    setPrompts([]);
+    setSkills([]);
+    setEvents([]);
+    setError("");
+  }
+
   useEffect(() => {
     const raw = localStorage.getItem(TOKEN_KEY);
     if (!raw) {
@@ -107,6 +119,8 @@ export default function Home() {
         body: JSON.stringify({ email, password }),
       });
       setTokens(data.tokens);
+      // Automatically load or create tenant after login
+      await loadTenant(data.tokens.access_token);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -114,24 +128,18 @@ export default function Home() {
     }
   }
 
-  async function setupTenant() {
-    if (!tokens) return;
-    setBusy(true);
-    setError("");
+  async function loadTenant(token: string) {
     try {
       const data = await api<{ id: string }>(
         "/v1/tenants/setup",
-        {
-          method: "POST",
-          body: JSON.stringify({}),
-        },
-        tokens.access_token,
+        { method: "POST", body: JSON.stringify({}) },
+        token,
       );
       setTenantId(data.id);
-      await fetchStatus(data.id, tokens.access_token);
-      await loadConfig(data.id, tokens.access_token);
-      await loadPrompts(data.id, tokens.access_token);
-      await loadSkills(data.id, tokens.access_token);
+      await fetchStatus(data.id, token);
+      await loadConfig(data.id, token);
+      await loadPrompts(data.id, token);
+      await loadSkills(data.id, token);
     } catch (err) {
       const msg = (err as Error).message;
       try {
@@ -139,19 +147,25 @@ export default function Home() {
         if (detail?.detail?.tenant_id) {
           const existingId = detail.detail.tenant_id;
           setTenantId(existingId);
-          await fetchStatus(existingId, tokens.access_token);
-          await loadConfig(existingId, tokens.access_token);
-          await loadPrompts(existingId, tokens.access_token);
-          await loadSkills(existingId, tokens.access_token);
+          await fetchStatus(existingId, token);
+          await loadConfig(existingId, token);
+          await loadPrompts(existingId, token);
+          await loadSkills(existingId, token);
           return;
         }
       } catch {
         // not JSON, fall through
       }
       setError(msg);
-    } finally {
-      setBusy(false);
     }
+  }
+
+  async function setupTenant() {
+    if (!tokens) return;
+    setBusy(true);
+    setError("");
+    await loadTenant(tokens.access_token);
+    setBusy(false);
   }
 
   async function fetchStatus(id: string, token: string = tokens?.access_token ?? "") {
@@ -281,11 +295,18 @@ export default function Home() {
 
   return (
     <main className="container">
-      <section className="card" style={{ marginBottom: "1rem" }}>
-        <h1 style={{ margin: 0, fontSize: "2rem" }}>Nexus SaaS Control</h1>
-        <p style={{ marginTop: "0.35rem", color: "var(--muted)" }}>
-          Control API: <span className="mono">{apiBase()}</span>
-        </p>
+      <section className="card" style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: "2rem" }}>Nexus SaaS Control</h1>
+          <p style={{ marginTop: "0.35rem", color: "var(--muted)" }}>
+            Control API: <span className="mono">{apiBase()}</span>
+          </p>
+        </div>
+        {tokens && (
+          <button className="secondary" onClick={logout} style={{ whiteSpace: "nowrap" }}>
+            Log Out
+          </button>
+        )}
       </section>
 
       {!tokens ? (
@@ -320,31 +341,30 @@ export default function Home() {
         <section className="grid cols-2">
           <article className="card">
             <h2 style={{ marginTop: 0 }}>Tenant</h2>
-            <div className="row" style={{ marginBottom: "0.75rem" }}>
-              <button className="primary" onClick={setupTenant} disabled={busy}>
-                Create Bot
-              </button>
-              <input
-                placeholder="tenant_id"
-                className="mono"
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <button
-                className="secondary"
-                onClick={() => {
-                  if (tokens && tenantId) {
-                    void fetchStatus(tenantId, tokens.access_token);
-                    void loadConfig(tenantId, tokens.access_token);
-                    void loadPrompts(tenantId, tokens.access_token);
-                    void loadSkills(tenantId, tokens.access_token);
-                  }
-                }}
-                disabled={busy || !tenantId}
-              >
-                Refresh
-              </button>
+            <div className="row" style={{ marginBottom: "0.75rem", alignItems: "center" }}>
+              {tenantId ? (
+                <>
+                  <span className="mono" style={{ flex: 1 }}>ID: {tenantId}</span>
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      if (tokens && tenantId) {
+                        void fetchStatus(tenantId, tokens.access_token);
+                        void loadConfig(tenantId, tokens.access_token);
+                        void loadPrompts(tenantId, tokens.access_token);
+                        void loadSkills(tenantId, tokens.access_token);
+                      }
+                    }}
+                    disabled={busy}
+                  >
+                    Refresh
+                  </button>
+                </>
+              ) : (
+                <button className="primary" onClick={setupTenant} disabled={busy}>
+                  Create Bot
+                </button>
+              )}
             </div>
 
             <p>
