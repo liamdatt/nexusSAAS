@@ -93,11 +93,18 @@ Environment scopes:
 
 ## Runtime Build (Pinned)
 
-Build and push runtime image with a pinned tag:
+Build and push runtime image from an exact NEXUS commit:
 
 ```bash
 cd /Users/liamdatt/Desktop/saas
-./scripts/build-runtime-image.sh <github_org> <nexus_sha> [flopro_nexus_version]
+./scripts/build-runtime-image.sh <github_org> <nexus_repo> <nexus_sha> [runtime_tag]
 ```
 
-Do not use `latest`.
+Examples:
+
+```bash
+./scripts/build-runtime-image.sh liamdatt liamdatt/NEXUS 34f078ebea842e0d7c364c7b2461c5c8bf93b9f7
+./scripts/build-runtime-image.sh liamdatt liamdatt/NEXUS 34f078ebea842e0d7c364c7b2461c5c8bf93b9f7 34f078ebea842e0d7c364c7b2461c5c8bf93b9f7-r1
+```
+
+Do not use `latest`. `NEXUS_IMAGE` must point to a runtime image built from the intended NEXUS source commit.

@@ -212,6 +212,9 @@ async def pair_start(
 ) -> GenericResponse:
     require_internal_auth(tenant_id, "pair_start", authorization)
     try:
+        await monitor.stop(tenant_id)
+        runtime_manager.compose_stop(tenant_id)
+        runtime_manager.clear_session_volume(tenant_id)
         runtime_manager.compose_start(tenant_id, nexus_image=body.nexus_image if body else None)
         await monitor.start(tenant_id)
         await publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
@@ -253,8 +256,10 @@ async def apply_config(
 async def whatsapp_disconnect(tenant_id: str, authorization: str | None = Header(default=None)) -> GenericResponse:
     require_internal_auth(tenant_id, "whatsapp_disconnect", authorization)
     try:
+        await monitor.stop(tenant_id)
+        runtime_manager.compose_stop(tenant_id)
         runtime_manager.clear_session_volume(tenant_id)
-        runtime_manager.compose_restart(tenant_id)
+        runtime_manager.compose_start(tenant_id)
         await monitor.start(tenant_id)
         await publisher.publish(tenant_id, "whatsapp.disconnected", {"reason": "disconnect_requested"})
     except RuntimeErrorManager as exc:

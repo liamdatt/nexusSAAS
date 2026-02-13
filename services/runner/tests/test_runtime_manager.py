@@ -283,6 +283,52 @@ def test_compose_start_requires_existing_compose(tmp_path: Path, monkeypatch) ->
         assert exc.code == "compose_missing"
 
 
+def test_clear_session_volume_treats_missing_volume_as_clean(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.write_compose("abc123", "ghcr.io/test/image:1")
+
+    with patch("app.runtime_manager.subprocess.run") as run_mock:
+        run_mock.return_value = _proc(returncode=1, stderr="Error: No such volume: tenant_abc123_session")
+        manager.clear_session_volume("abc123")
+
+    assert run_mock.call_count == 1
+    assert run_mock.call_args.args[0] == ["docker", "volume", "inspect", "tenant_abc123_session"]
+
+
+def test_clear_session_volume_removes_dotfiles(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.write_compose("abc123", "ghcr.io/test/image:1")
+
+    with patch("app.runtime_manager.subprocess.run") as run_mock:
+        run_mock.side_effect = [_proc(returncode=0), _proc(returncode=0)]
+        manager.clear_session_volume("abc123")
+
+    assert run_mock.call_count == 2
+    cleanup_args = run_mock.call_args_list[1].args[0]
+    assert cleanup_args[:7] == ["docker", "run", "--rm", "-v", "tenant_abc123_session:/session", "busybox", "sh"]
+    assert cleanup_args[7:] == ["-c", "rm -rf /session/* /session/.[!.]* /session/..?*"]
+
+
 def test_repo_template_uses_rw_config_mount() -> None:
     template_path = Path(__file__).resolve().parents[3] / "runtime" / "templates" / "tenant-compose.yml.tmpl"
     template = template_path.read_text(encoding="utf-8")

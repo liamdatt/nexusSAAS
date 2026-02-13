@@ -4,11 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       nexus_sha:
-        description: "Patched Nexus commit SHA used as runtime image tag"
+        description: "NEXUS commit SHA to install from GitHub"
         required: true
         type: string
-      flopro_nexus_version:
-        description: "Optional published package version (e.g. 0.1.4)"
+      nexus_repo:
+        description: "GitHub repo slug for NEXUS source (owner/repo)"
+        required: false
+        default: "liamdatt/NEXUS"
+        type: string
+      runtime_tag:
+        description: "Optional runtime image tag override (defaults to nexus_sha)"
         required: false
         type: string
 
@@ -40,6 +45,7 @@ jobs:
           file: runtime/images/runtime/Dockerfile
           push: true
           build-args: |
-            FLOPRO_NEXUS_VERSION=${{ github.event.inputs.flopro_nexus_version }}
+            NEXUS_GIT_REPO=${{ github.event.inputs.nexus_repo }}
+            NEXUS_SHA=${{ github.event.inputs.nexus_sha }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/nexus-runtime:${{ github.event.inputs.nexus_sha }}
+            ghcr.io/${{ github.repository_owner }}/nexus-runtime:${{ github.event.inputs.runtime_tag || github.event.inputs.nexus_sha }}

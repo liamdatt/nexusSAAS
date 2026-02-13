@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <github_org> <nexus_sha> [flopro_nexus_version]" >&2
-  echo "example: $0 acme 4f0c2a1 0.1.4" >&2
+if [[ $# -lt 3 ]]; then
+  echo "usage: $0 <github_org> <nexus_repo> <nexus_sha> [runtime_tag]" >&2
+  echo "example: $0 acme acme/NEXUS 4f0c2a1 4f0c2a1-r1" >&2
   exit 1
 fi
 
 GITHUB_ORG="$1"
-NEXUS_SHA="$2"
-FLOPRO_NEXUS_VERSION="${3:-}"
-IMAGE="ghcr.io/${GITHUB_ORG}/nexus-runtime:${NEXUS_SHA}"
+NEXUS_REPO="$2"
+NEXUS_SHA="$3"
+RUNTIME_TAG="${4:-${NEXUS_SHA}}"
+IMAGE="ghcr.io/${GITHUB_ORG}/nexus-runtime:${RUNTIME_TAG}"
 
 cd /Users/liamdatt/Desktop/saas
 
-BUILD_ARGS=()
-if [[ -n "$FLOPRO_NEXUS_VERSION" ]]; then
-  BUILD_ARGS+=(--build-arg "FLOPRO_NEXUS_VERSION=${FLOPRO_NEXUS_VERSION}")
-fi
+BUILD_ARGS=(
+  --build-arg "NEXUS_GIT_REPO=${NEXUS_REPO}"
+  --build-arg "NEXUS_SHA=${NEXUS_SHA}"
+)
 
 echo "building ${IMAGE}"
 docker build \

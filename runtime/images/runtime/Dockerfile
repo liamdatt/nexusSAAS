@@ -15,12 +15,13 @@ RUN npm install -g tsx@4
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
-ARG FLOPRO_NEXUS_VERSION=""
-RUN if [ -n "$FLOPRO_NEXUS_VERSION" ]; then \
-      uv tool install "flopro-nexus==${FLOPRO_NEXUS_VERSION}"; \
-    else \
-      uv tool install flopro-nexus; \
-    fi
+ARG NEXUS_GIT_REPO="liamdatt/NEXUS"
+ARG NEXUS_SHA=""
+RUN if [ -z "$NEXUS_SHA" ]; then \
+      echo "NEXUS_SHA build arg is required" >&2; \
+      exit 1; \
+    fi \
+    && uv tool install "flopro-nexus @ git+https://github.com/${NEXUS_GIT_REPO}.git@${NEXUS_SHA}"
 
 WORKDIR /srv/nexus
 COPY runtime/images/runtime/entrypoint.sh /entrypoint.sh

@@ -110,3 +110,111 @@ def test_stop_endpoint_stops_monitor_before_publishing_status(monkeypatch) -> No
     monitor_stop.assert_awaited_once_with("abc123")
     compose_stop.assert_called_once_with("abc123")
     publish.assert_awaited_once_with("abc123", "runtime.status", {"state": "paused"})
+
+
+def test_pair_start_resets_session_before_starting_monitor(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _monitor_stop(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.stop")
+
+    def _compose_stop(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("compose.stop")
+
+    def _clear_session(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("session.clear")
+
+    def _compose_start(tenant_id: str, nexus_image: str | None = None) -> None:
+        assert tenant_id == "abc123"
+        assert nexus_image == "ghcr.io/test/nexus-runtime:new"
+        calls.append("compose.start")
+
+    async def _monitor_start(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.start")
+
+    async def _publish(tenant_id: str, event_type: str, payload: dict) -> None:
+        assert tenant_id == "abc123"
+        assert event_type == "runtime.status"
+        assert payload == {"state": "pending_pairing"}
+        calls.append("publish.pending_pairing")
+
+    monkeypatch.setattr(main.monitor, "stop", _monitor_stop)
+    monkeypatch.setattr(main.runtime_manager, "compose_stop", _compose_stop)
+    monkeypatch.setattr(main.runtime_manager, "clear_session_volume", _clear_session)
+    monkeypatch.setattr(main.runtime_manager, "compose_start", _compose_start)
+    monkeypatch.setattr(main.monitor, "start", _monitor_start)
+    monkeypatch.setattr(main.publisher, "publish", _publish)
+
+    token = _token("abc123", "pair_start")
+    result = asyncio.run(
+        main.pair_start(
+            "abc123",
+            body=main.RuntimeActionRequest(nexus_image="ghcr.io/test/nexus-runtime:new"),
+            authorization=f"Bearer {token}",
+        )
+    )
+
+    assert result.detail == "pairing_started"
+    assert calls == [
+        "monitor.stop",
+        "compose.stop",
+        "session.clear",
+        "compose.start",
+        "monitor.start",
+        "publish.pending_pairing",
+    ]
+
+
+def test_disconnect_resets_session_before_restarting_monitor(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _monitor_stop(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.stop")
+
+    def _compose_stop(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("compose.stop")
+
+    def _clear_session(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("session.clear")
+
+    def _compose_start(tenant_id: str, nexus_image: str | None = None) -> None:
+        assert tenant_id == "abc123"
+        assert nexus_image is None
+        calls.append("compose.start")
+
+    async def _monitor_start(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.start")
+
+    async def _publish(tenant_id: str, event_type: str, payload: dict) -> None:
+        assert tenant_id == "abc123"
+        assert event_type == "whatsapp.disconnected"
+        assert payload == {"reason": "disconnect_requested"}
+        calls.append("publish.disconnected")
+
+    monkeypatch.setattr(main.monitor, "stop", _monitor_stop)
+    monkeypatch.setattr(main.runtime_manager, "compose_stop", _compose_stop)
+    monkeypatch.setattr(main.runtime_manager, "clear_session_volume", _clear_session)
+    monkeypatch.setattr(main.runtime_manager, "compose_start", _compose_start)
+    monkeypatch.setattr(main.monitor, "start", _monitor_start)
+    monkeypatch.setattr(main.publisher, "publish", _publish)
+
+    token = _token("abc123", "whatsapp_disconnect")
+    result = asyncio.run(main.whatsapp_disconnect("abc123", authorization=f"Bearer {token}"))
+
+    assert result.detail == "whatsapp_disconnected"
+    assert calls == [
+        "monitor.stop",
+        "compose.stop",
+        "session.clear",
+        "compose.start",
+        "monitor.start",
+        "publish.disconnected",
+    ]

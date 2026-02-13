@@ -120,11 +120,18 @@ Environment examples:
 - `/Users/liamdatt/Desktop/saas/deploy/control-vps/.env.example`
 - `/Users/liamdatt/Desktop/saas/deploy/worker-vps/.env.example`
 
-Build and push pinned runtime image:
+Build and push pinned runtime image from an exact NEXUS commit:
 
 ```bash
 cd /Users/liamdatt/Desktop/saas
-./scripts/build-runtime-image.sh <github_org> <nexus_sha> [flopro_nexus_version]
+./scripts/build-runtime-image.sh <github_org> <nexus_repo> <nexus_sha> [runtime_tag]
+```
+
+Example:
+
+```bash
+./scripts/build-runtime-image.sh liamdatt liamdatt/NEXUS 34f078ebea842e0d7c364c7b2461c5c8bf93b9f7
+./scripts/build-runtime-image.sh liamdatt liamdatt/NEXUS 34f078ebea842e0d7c364c7b2461c5c8bf93b9f7 34f078ebea842e0d7c364c7b2461c5c8bf93b9f7-r1
 ```
 
 ## Runtime Version Pinning Policy
@@ -133,6 +140,8 @@ Deployment must use pinned image tags (SHA-like tags), never floating `latest`:
 
 - `IMAGE_TAG=sha-REPLACE_WITH_COMMIT`
 - `NEXUS_IMAGE=ghcr.io/<org>/nexus-runtime:sha-REPLACE_WITH_COMMIT`
+
+`NEXUS_IMAGE` must be a runtime image built from the same NEXUS source commit you intend to run, not only a matching tag label.
 
 ## Backup Scripts
 

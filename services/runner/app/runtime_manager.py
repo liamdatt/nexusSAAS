@@ -350,7 +350,24 @@ class RuntimeManager:
     def clear_session_volume(self, tenant_id: str) -> None:
         self.validate_layout(tenant_id, require_existing=True)
         volume = f"tenant_{tenant_id}_session"
-        self._run(["docker", "run", "--rm", "-v", f"{volume}:/session", "busybox", "sh", "-c", "rm -rf /session/*"])
+        logger.info("Clearing tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
+
+        inspect_rc, inspect_out = self._run_capture(["docker", "volume", "inspect", volume])
+        if inspect_rc != 0:
+            lowered = inspect_out.lower()
+            if "no such volume" in lowered:
+                logger.info("Session volume not found; treating as already clean tenant_id=%s volume=%s", tenant_id, volume)
+                return
+            raise RuntimeErrorManager(
+                "docker_command_failed",
+                f"command_failed args={['docker', 'volume', 'inspect', volume]} output={inspect_out}",
+            )
+
+        cleanup_cmd = "rm -rf /session/* /session/.[!.]* /session/..?*"
+        self._run(
+            ["docker", "run", "--rm", "-v", f"{volume}:/session", "busybox", "sh", "-c", cleanup_cmd]
+        )
+        logger.info("Cleared tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
 
     def is_running(self, tenant_id: str) -> tuple[bool, str]:
         self.validate_tenant_id(tenant_id)

@@ -16,6 +16,9 @@ Use pinned image tags only (no `latest`):
 - `IMAGE_TAG=sha-REPLACE_WITH_COMMIT`
 - `NEXUS_IMAGE=ghcr.io/<org>/nexus-runtime:sha-REPLACE_WITH_COMMIT`
 
+`NEXUS_IMAGE` must reference a runtime image built from the intended NEXUS git commit.  
+For same-commit rebuilds, use a suffix tag (for example `<nexus_sha>-r1`) and repin to that exact tag.
+
 ## Required Environment Semantics
 
 - `CONTROL_PRIVATE_IP` is host IP only (for example `10.0.0.2`).
