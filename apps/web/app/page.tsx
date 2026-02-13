@@ -27,6 +27,8 @@ type Prompt = { name: string; revision: number; content: string };
 type Skill = { skill_id: string; revision: number; content: string };
 
 type EventItem = {
+  event_id?: number;
+  tenant_id?: string;
   type: string;
   created_at?: string;
   payload?: Record<string, unknown>;
@@ -60,6 +62,33 @@ function safeJsonParse<T>(value: string, fallback: T): T {
   }
 }
 
+function eventKey(ev: EventItem): string {
+  if (typeof ev.event_id === "number") {
+    return `id:${ev.event_id}`;
+  }
+  return `sig:${ev.type}:${ev.created_at ?? ""}:${JSON.stringify(ev.payload ?? {})}`;
+}
+
+function mergeEvents(existing: EventItem[], incoming: EventItem[]): EventItem[] {
+  const seen = new Set<string>();
+  const merged: EventItem[] = [];
+  for (const ev of [...incoming, ...existing]) {
+    const key = eventKey(ev);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(ev);
+  }
+  return merged.slice(0, 80);
+}
+
+function extractQr(payload?: Record<string, unknown>): string {
+  if (!payload) return "";
+  const raw = payload.qr ?? payload.qr_code ?? payload.qrcode ?? payload.code;
+  return typeof raw === "string" ? raw : "";
+}
+
 export default function Home() {
   const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("supersecure123");
@@ -76,13 +105,38 @@ export default function Home() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [latestQr, setLatestQr] = useState("");
+  const [qrState, setQrState] = useState<"idle" | "waiting" | "ready" | "timeout">("idle");
   const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
   const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const tenantBootstrapAttemptedToken = useRef<string | null>(null);
+  const latestEventIdRef = useRef<number | null>(null);
+  const qrPollGeneration = useRef(0);
+
+  function stopQrPolling() {
+    qrPollGeneration.current += 1;
+  }
+
+  function applyIncomingEvents(incoming: EventItem[]) {
+    if (incoming.length === 0) return;
+    for (const ev of incoming) {
+      if (typeof ev.event_id === "number") {
+        latestEventIdRef.current = Math.max(latestEventIdRef.current ?? 0, ev.event_id);
+      }
+      const qr = ev.type === "whatsapp.qr" ? extractQr(ev.payload) : "";
+      if (qr) {
+        setLatestQr(qr);
+        setQrState("ready");
+        stopQrPolling();
+      }
+    }
+    setEvents((prev) => mergeEvents(prev, incoming));
+  }
 
   function logout() {
+    stopQrPolling();
     localStorage.removeItem(TOKEN_KEY);
     setTokens(null);
     setTenantId("");
@@ -93,10 +147,13 @@ export default function Home() {
     setPrompts([]);
     setSkills([]);
     setEvents([]);
+    setLatestQr("");
+    setQrState("idle");
     setOpenrouterKeyInput("");
     setRequiresOpenRouterKey(false);
     setError("");
     tenantBootstrapAttemptedToken.current = null;
+    latestEventIdRef.current = null;
   }
 
   useEffect(() => {
@@ -118,6 +175,12 @@ export default function Home() {
   }, [tokens]);
 
   useEffect(() => {
+    return () => {
+      stopQrPolling();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!tokens || tenantId) {
       return;
     }
@@ -135,10 +198,19 @@ export default function Home() {
       return;
     }
 
-    const socket = new WebSocket(wsUrl(tokens.access_token));
+    const socket = new WebSocket(
+      wsUrl(tokens.access_token, {
+        tenantId,
+        replay: 80,
+        afterEventId: latestEventIdRef.current ?? undefined,
+      }),
+    );
     socket.onmessage = (ev) => {
-      const parsed = safeJsonParse<EventItem>(ev.data, { type: "runtime.log" });
-      setEvents((prev) => [parsed, ...prev].slice(0, 80));
+      const parsed = safeJsonParse<EventItem>(ev.data, { type: "runtime.log", payload: {} });
+      if (parsed.tenant_id && parsed.tenant_id !== tenantId) {
+        return;
+      }
+      applyIncomingEvents([parsed]);
       if (parsed.type === "runtime.status" && tenantId) {
         void fetchStatus(tenantId, tokens.access_token);
       }
@@ -150,6 +222,19 @@ export default function Home() {
     // Websocket lifecycle is intentionally scoped to tenant/token.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId, tokens]);
+
+  useEffect(() => {
+    stopQrPolling();
+    latestEventIdRef.current = null;
+    setEvents([]);
+    setLatestQr("");
+    setQrState("idle");
+    if (tenantId && tokens) {
+      void loadRecentEvents(tenantId, tokens.access_token, { limit: 20 });
+    }
+    // Tenant changes should reset stream state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
 
   async function handleAuth(path: "/v1/auth/signup" | "/v1/auth/login") {
     setBusy(true);
@@ -272,10 +357,76 @@ export default function Home() {
     setSkills(data);
   }
 
+  async function loadRecentEvents(
+    id: string,
+    token: string,
+    options: { limit?: number; afterEventId?: number | null; types?: string[] } = {},
+  ) {
+    const params = new URLSearchParams();
+    params.set("limit", String(options.limit ?? 50));
+    if (typeof options.afterEventId === "number") {
+      params.set("after_event_id", String(options.afterEventId));
+    }
+    if (options.types && options.types.length > 0) {
+      params.set("types", options.types.join(","));
+    }
+    const query = params.toString();
+    const path = `/v1/tenants/${id}/events/recent${query ? `?${query}` : ""}`;
+    const rows = await api<EventItem[]>(path, {}, token);
+    applyIncomingEvents(rows);
+    return rows;
+  }
+
+  async function pollForQr(id: string, token: string) {
+    const generation = qrPollGeneration.current + 1;
+    qrPollGeneration.current = generation;
+    setQrState("waiting");
+    const deadline = Date.now() + 90_000;
+
+    while (qrPollGeneration.current === generation && Date.now() < deadline) {
+      try {
+        const rows = await loadRecentEvents(id, token, {
+          limit: 50,
+          afterEventId: latestEventIdRef.current,
+          types: ["whatsapp.qr"],
+        });
+        if (qrPollGeneration.current !== generation) {
+          return;
+        }
+        const qrEvent = rows.find((ev) => ev.type === "whatsapp.qr" && Boolean(extractQr(ev.payload)));
+        if (qrEvent) {
+          const qr = extractQr(qrEvent.payload);
+          if (qr) {
+            setLatestQr(qr);
+            setQrState("ready");
+            stopQrPolling();
+            return;
+          }
+        }
+      } catch {
+        // ignore transient fallback polling errors
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    if (qrPollGeneration.current === generation) {
+      setQrState("timeout");
+    }
+  }
+
   async function runOperation(op: "start" | "stop" | "restart" | "pair/start" | "whatsapp/disconnect") {
     if (!tokens || !tenantId) return;
     setBusy(true);
     setError("");
+    if (op === "pair/start") {
+      stopQrPolling();
+      setLatestQr("");
+      setQrState("waiting");
+    }
+    if (op === "stop" || op === "whatsapp/disconnect") {
+      stopQrPolling();
+      setQrState("idle");
+    }
     try {
       let mapped = `/v1/tenants/${tenantId}/runtime/${op}`;
       if (op === "pair/start") {
@@ -286,8 +437,14 @@ export default function Home() {
       }
       await api(mapped, { method: "POST" }, tokens.access_token);
       await fetchStatus(tenantId, tokens.access_token);
+      if (op === "pair/start") {
+        void pollForQr(tenantId, tokens.access_token);
+      }
     } catch (err) {
       setError((err as Error).message);
+      if (op === "pair/start") {
+        setQrState("timeout");
+      }
     } finally {
       setBusy(false);
     }
@@ -514,6 +671,21 @@ export default function Home() {
               <p style={{ marginTop: "-0.35rem", color: "var(--danger)" }}>
                 Set <span className="mono">NEXUS_OPENROUTER_API_KEY</span> in Runtime Config and save before Start, Restart, or Pair WhatsApp.
               </p>
+            )}
+
+            <h3>WhatsApp QR</h3>
+            {qrState === "waiting" && <p style={{ marginTop: 0, color: "var(--muted)" }}>Waiting for QR event...</p>}
+            {qrState === "timeout" && (
+              <p style={{ marginTop: 0, color: "var(--danger)" }}>
+                QR was not received in time. Click <strong>Pair WhatsApp</strong> again.
+              </p>
+            )}
+            {!latestQr ? (
+              <div className="mono" style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+                No QR received yet.
+              </div>
+            ) : (
+              <textarea className="mono" readOnly value={latestQr} rows={5} />
             )}
 
             <h3>Live Events</h3>

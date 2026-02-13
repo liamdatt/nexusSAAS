@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.crypto import SecretCipher
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import ConfigRevision, PromptRevision, SkillRevision, Tenant, TenantRuntime, TenantSecret, User
+from app.models import ConfigRevision, PromptRevision, RuntimeEvent, SkillRevision, Tenant, TenantRuntime, TenantSecret, User
 from app.runner_client import RunnerClient, RunnerError
 from app.schemas import (
     ConfigOut,
@@ -20,6 +20,7 @@ from app.schemas import (
     OperationAccepted,
     PromptOut,
     PromptPutRequest,
+    RuntimeEventOut,
     SkillOut,
     SkillPutRequest,
     TenantOut,
@@ -361,6 +362,40 @@ async def get_config(
     if active is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active config not found")
     return ConfigOut(tenant_id=tenant_id, revision=active.revision, env_json=active.env_json)
+
+
+@router.get("/{tenant_id}/events/recent", response_model=list[RuntimeEventOut])
+async def get_recent_events(
+    tenant_id: str,
+    limit: int = 50,
+    after_event_id: int | None = None,
+    types: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[RuntimeEventOut]:
+    _tenant_for_owner(db, tenant_id, user.id)
+
+    bounded_limit = max(1, min(limit, 200))
+    stmt = select(RuntimeEvent).where(RuntimeEvent.tenant_id == tenant_id)
+    if after_event_id is not None:
+        stmt = stmt.where(RuntimeEvent.id > after_event_id)
+
+    if types:
+        selected_types = [item.strip() for item in types.split(",") if item.strip()]
+        if selected_types:
+            stmt = stmt.where(RuntimeEvent.type.in_(selected_types))
+
+    rows = db.scalars(stmt.order_by(RuntimeEvent.id.desc()).limit(bounded_limit)).all()
+    return [
+        RuntimeEventOut(
+            event_id=row.id,
+            tenant_id=row.tenant_id,
+            type=row.type,
+            payload=row.payload_json,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 @router.patch("/{tenant_id}/config", response_model=ConfigOut)

@@ -6,7 +6,6 @@ services:
     env_file:
       - .env
     environment:
-      REDIS_URL: redis://${CONTROL_PRIVATE_IP}:6379/0
       TENANT_NETWORK: runner_internal
       TEMPLATE_COMPOSE_PATH: /app/runtime/templates/tenant-compose.yml.tmpl
       TEMPLATE_ENV_PATH: /app/runtime/templates/runtime.env.tmpl

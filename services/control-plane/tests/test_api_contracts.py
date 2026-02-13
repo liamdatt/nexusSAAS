@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -316,3 +317,41 @@ def test_config_patch_noop_keeps_revision(client: TestClient) -> None:
     after = client.get(f"/v1/tenants/{tenant_id}/config", headers={"Authorization": f"Bearer {token}"})
     assert after.status_code == 200
     assert after.json()["revision"] == before_revision
+
+
+def test_recent_events_endpoint_filters_and_scopes(client: TestClient) -> None:
+    user_a = _signup(client, "contracts-events-a@example.com")
+    token_a = user_a["tokens"]["access_token"]
+    tenant_a = _setup_tenant(client, token_a)
+
+    user_b = _signup(client, "contracts-events-b@example.com")
+    token_b = user_b["tokens"]["access_token"]
+    tenant_b = _setup_tenant(client, token_b)
+
+    asyncio.run(app.state.events.emit(tenant_a, "runtime.status", {"state": "pending_pairing"}))
+    asyncio.run(app.state.events.emit(tenant_a, "whatsapp.qr", {"qr": "qr-a"}))
+    asyncio.run(app.state.events.emit(tenant_b, "whatsapp.qr", {"qr": "qr-b"}))
+
+    recent = client.get(
+        f"/v1/tenants/{tenant_a}/events/recent?limit=10&types=whatsapp.qr",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert recent.status_code == 200
+    rows = recent.json()
+    assert len(rows) >= 1
+    assert all(row["tenant_id"] == tenant_a for row in rows)
+    assert all(row["type"] == "whatsapp.qr" for row in rows)
+    latest_event_id = rows[0]["event_id"]
+
+    after = client.get(
+        f"/v1/tenants/{tenant_a}/events/recent?after_event_id={latest_event_id}&types=whatsapp.qr",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert after.status_code == 200
+    assert after.json() == []
+
+    denied = client.get(
+        f"/v1/tenants/{tenant_a}/events/recent",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert denied.status_code == 404

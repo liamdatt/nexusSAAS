@@ -96,6 +96,7 @@ class SkillOut(BaseModel):
 
 
 class RuntimeEventOut(BaseModel):
+    event_id: int
     tenant_id: str
     type: str
     payload: dict

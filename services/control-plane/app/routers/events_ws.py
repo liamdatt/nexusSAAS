@@ -32,9 +32,16 @@ async def events_ws(websocket: WebSocket) -> None:
         return
 
     user_id = int(claims["sub"])
+    requested_tenant_id = websocket.query_params.get("tenant_id")
+
     db = SessionLocal()
     try:
-        tenant = db.scalar(select(Tenant).where(Tenant.owner_user_id == user_id))
+        if requested_tenant_id:
+            tenant = db.scalar(
+                select(Tenant).where(Tenant.id == requested_tenant_id, Tenant.owner_user_id == user_id)
+            )
+        else:
+            tenant = db.scalar(select(Tenant).where(Tenant.owner_user_id == user_id))
         if tenant is None:
             await websocket.close(code=1008)
             return

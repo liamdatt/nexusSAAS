@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from time import monotonic
 
 import websockets
 
@@ -14,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class TenantMonitor:
+    STARTUP_GRACE_SECONDS = 15.0
+    RUNTIME_ERROR_COOLDOWN_SECONDS = 10.0
+
     def __init__(self, publisher: EventPublisher, runtime_manager: RuntimeManager) -> None:
         self.publisher = publisher
         self.runtime_manager = runtime_manager
@@ -43,6 +47,9 @@ class TenantMonitor:
     async def _run(self, tenant_id: str) -> None:
         ws_url = self.runtime_manager.bridge_ws_url(tenant_id)
         backoff_seconds = 1.0
+        connected_once = False
+        startup_grace_until = monotonic() + self.STARTUP_GRACE_SECONDS
+        next_runtime_error_at = 0.0
         while True:
             try:
                 headers = self.runtime_manager.bridge_ws_headers(tenant_id)
@@ -58,6 +65,7 @@ class TenantMonitor:
                         ws_url,
                         "secret_header" if headers else "none",
                     )
+                    connected_once = True
                     backoff_seconds = 1.0
                     await self.publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
                     async for raw in ws:
@@ -65,6 +73,8 @@ class TenantMonitor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                now = monotonic()
+                transient_error = self._is_transient_monitor_error(exc)
                 logger.warning(
                     "bridge monitor error tenant_id=%s ws_url=%s err_type=%s err=%s",
                     tenant_id,
@@ -72,11 +82,28 @@ class TenantMonitor:
                     type(exc).__name__,
                     exc,
                 )
-                await self.publisher.publish(
-                    tenant_id,
-                    "runtime.error",
-                    {"message": f"bridge_monitor_error: {exc}", "retry_in_seconds": backoff_seconds},
-                )
+                suppress_for_startup = transient_error and not connected_once and now < startup_grace_until
+                if suppress_for_startup:
+                    logger.info(
+                        "bridge monitor startup grace active tenant_id=%s err_type=%s retry_in_seconds=%s",
+                        tenant_id,
+                        type(exc).__name__,
+                        backoff_seconds,
+                    )
+                elif now >= next_runtime_error_at:
+                    await self.publisher.publish(
+                        tenant_id,
+                        "runtime.error",
+                        {"message": f"bridge_monitor_error: {exc}", "retry_in_seconds": backoff_seconds},
+                    )
+                    next_runtime_error_at = now + self.RUNTIME_ERROR_COOLDOWN_SECONDS
+                else:
+                    logger.debug(
+                        "bridge monitor runtime.error throttled tenant_id=%s err_type=%s next_emit_in=%.2f",
+                        tenant_id,
+                        type(exc).__name__,
+                        max(next_runtime_error_at - now, 0.0),
+                    )
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2.0, 30.0)
 
@@ -151,3 +178,8 @@ class TenantMonitor:
             if isinstance(value, str) and value:
                 return {"qr": value}
         return {}
+
+    def _is_transient_monitor_error(self, exc: Exception) -> bool:
+        if isinstance(exc, OSError):
+            return True
+        return type(exc).__name__ in {"ConnectionClosed", "ConnectionClosedError", "InvalidStatus", "InvalidStatusCode"}

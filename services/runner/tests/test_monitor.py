@@ -117,3 +117,37 @@ def test_monitor_connects_with_bridge_secret_header() -> None:
 
     headers = asyncio.run(_exercise())
     assert headers == {"x-nexus-secret": "bridge-secret"}
+
+
+def test_monitor_rate_limits_transient_startup_errors() -> None:
+    publisher = DummyPublisher()
+    monitor = TenantMonitor(publisher, DummyRuntimeManager())
+
+    current_time = 0.0
+    sleep_calls = 0
+
+    def _fake_monotonic() -> float:
+        nonlocal current_time
+        current_time += 1.0
+        return current_time
+
+    async def _fake_sleep(seconds: float) -> None:
+        nonlocal sleep_calls, current_time
+        sleep_calls += 1
+        current_time += seconds
+        if sleep_calls >= 6:
+            raise asyncio.CancelledError()
+
+    with (
+        patch("app.monitor.websockets.connect", side_effect=OSError(-2, "Name or service not known")),
+        patch("app.monitor.monotonic", side_effect=_fake_monotonic),
+        patch("app.monitor.asyncio.sleep", side_effect=_fake_sleep),
+    ):
+        try:
+            asyncio.run(monitor._run("abc123"))
+            assert False, "expected monitor loop cancellation"
+        except asyncio.CancelledError:
+            pass
+
+    runtime_errors = [item for item in publisher.items if item[1] == "runtime.error"]
+    assert 1 <= len(runtime_errors) <= 2

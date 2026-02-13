@@ -36,8 +36,24 @@ export async function api<T>(path: string, options: RequestInit = {}, token?: st
   return (await resp.json()) as T;
 }
 
-export function wsUrl(token: string): string {
+type WsUrlOptions = {
+  tenantId?: string;
+  replay?: number;
+  afterEventId?: number;
+};
+
+export function wsUrl(token: string, options: WsUrlOptions = {}): string {
   const protocol = base.startsWith("https") ? "wss" : "ws";
   const stripped = base.replace(/^https?:\/\//, "");
-  return `${protocol}://${stripped}/v1/events/ws?token=${encodeURIComponent(token)}`;
+  const params = new URLSearchParams({ token });
+  if (options.tenantId) {
+    params.set("tenant_id", options.tenantId);
+  }
+  if (typeof options.replay === "number") {
+    params.set("replay", String(options.replay));
+  }
+  if (typeof options.afterEventId === "number") {
+    params.set("after_event_id", String(options.afterEventId));
+  }
+  return `${protocol}://${stripped}/v1/events/ws?${params.toString()}`;
 }

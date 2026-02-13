@@ -57,8 +57,8 @@ def client() -> Iterator[TestClient]:
         yield c
 
 
-def _signup_and_setup(client: TestClient) -> tuple[str, str]:
-    auth = client.post("/v1/auth/signup", json={"email": "ws@example.com", "password": "supersecure123"}).json()
+def _signup_and_setup(client: TestClient, email: str = "ws@example.com") -> tuple[str, str]:
+    auth = client.post("/v1/auth/signup", json={"email": email, "password": "supersecure123"}).json()
     token = auth["tokens"]["access_token"]
     setup = client.post(
         "/v1/tenants/setup",
@@ -72,15 +72,26 @@ def test_ws_fanout_and_replay(client: TestClient) -> None:
     token, tenant_id = _signup_and_setup(client)
 
     asyncio.run(app.state.events.emit(tenant_id, "runtime.status", {"state": "pending_pairing"}))
+    asyncio.run(app.state.events.emit(tenant_id, "whatsapp.qr", {"qr": "qr-token"}))
 
-    with client.websocket_connect(f"/v1/events/ws?token={token}&replay=10") as ws:
+    with client.websocket_connect(f"/v1/events/ws?token={token}&tenant_id={tenant_id}&replay=10") as ws:
         ready = ws.receive_json()
         assert ready["type"] == "ws.ready"
+        assert ready["tenant_id"] == tenant_id
 
-        replayed = ws.receive_json()
-        assert replayed["type"] == "runtime.status"
-        assert replayed["tenant_id"] == tenant_id
-        assert replayed["payload"]["state"] == "pending_pairing"
+        replay_types: set[str] = set()
+        for _ in range(4):
+            replayed = ws.receive_json()
+            replay_types.add(replayed["type"])
+            if replayed["type"] == "runtime.status":
+                assert replayed["tenant_id"] == tenant_id
+                assert replayed["payload"]["state"] == "pending_pairing"
+            if replayed["type"] == "whatsapp.qr":
+                assert replayed["payload"]["qr"] == "qr-token"
+            if {"runtime.status", "whatsapp.qr"}.issubset(replay_types):
+                break
+        assert "runtime.status" in replay_types
+        assert "whatsapp.qr" in replay_types
 
         asyncio.run(app.state.events.emit(tenant_id, "config.applied", {"revision": 2}))
         live = ws.receive_json()
@@ -88,3 +99,12 @@ def test_ws_fanout_and_replay(client: TestClient) -> None:
             live = ws.receive_json()
         assert live["type"] == "config.applied"
         assert live["payload"]["revision"] == 2
+
+
+def test_ws_rejects_foreign_tenant_subscription(client: TestClient) -> None:
+    _token_a, tenant_a = _signup_and_setup(client, email="ws-owner-a@example.com")
+    token_b, _tenant_b = _signup_and_setup(client, email="ws-owner-b@example.com")
+
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"/v1/events/ws?token={token_b}&tenant_id={tenant_a}") as ws:
+            ws.receive_json()
