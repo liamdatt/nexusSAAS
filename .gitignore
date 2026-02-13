@@ -39,3 +39,5 @@ yarn-error.log*
 # Build artifacts
 build
 *.tsbuildinfo
+Nexus
+/Nexus
