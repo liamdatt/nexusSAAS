@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
 
 import { api, apiBase, Tokens, wsUrl } from "@/lib/api";
 
@@ -106,6 +107,9 @@ export default function Home() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [latestQr, setLatestQr] = useState("");
+  const [qrImageDataUrl, setQrImageDataUrl] = useState("");
+  const [qrRenderError, setQrRenderError] = useState("");
+  const [showRawQrDebug, setShowRawQrDebug] = useState(false);
   const [qrState, setQrState] = useState<"idle" | "waiting" | "ready" | "timeout">("idle");
   const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
   const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
@@ -117,9 +121,14 @@ export default function Home() {
   const pairStartMinEventIdRef = useRef<number>(-1);
   const latestQrEventIdRef = useRef<number>(-1);
   const qrPollAfterEventIdRef = useRef<number | null>(null);
+  const qrRenderGenerationRef = useRef(0);
 
   function stopQrPolling() {
     qrPollGeneration.current += 1;
+  }
+
+  function toggleRawQrDebug() {
+    setShowRawQrDebug((prev) => !prev);
   }
 
   function applyIncomingEvents(incoming: EventItem[]) {
@@ -202,6 +211,39 @@ export default function Home() {
     }
     localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
   }, [tokens]);
+
+  useEffect(() => {
+    const generation = qrRenderGenerationRef.current + 1;
+    qrRenderGenerationRef.current = generation;
+
+    if (!latestQr) {
+      setQrImageDataUrl("");
+      setQrRenderError("");
+      setShowRawQrDebug(false);
+      return;
+    }
+
+    setQrRenderError("");
+    void QRCode.toDataURL(latestQr, {
+      width: 320,
+      margin: 1,
+      errorCorrectionLevel: "M",
+    })
+      .then((dataUrl) => {
+        if (qrRenderGenerationRef.current !== generation) {
+          return;
+        }
+        setQrImageDataUrl(dataUrl);
+      })
+      .catch((err: unknown) => {
+        if (qrRenderGenerationRef.current !== generation) {
+          return;
+        }
+        setQrImageDataUrl("");
+        const message = err instanceof Error ? err.message : "Unable to render QR image.";
+        setQrRenderError(message);
+      });
+  }, [latestQr]);
 
   useEffect(() => {
     return () => {
@@ -414,6 +456,7 @@ export default function Home() {
     qrPollGeneration.current = generation;
     setQrState("waiting");
     const deadline = Date.now() + 90_000;
+    let idleCycles = 0;
 
     while (qrPollGeneration.current === generation && Date.now() < deadline) {
       try {
@@ -437,6 +480,37 @@ export default function Home() {
         if (latestQrEventIdRef.current > previousQrEventId) {
           return;
         }
+
+        idleCycles += 1;
+        if (idleCycles >= 3) {
+          idleCycles = 0;
+          const fallbackRows = await loadRecentEvents(id, token, {
+            limit: 1,
+            types: ["whatsapp.qr"],
+          });
+          if (qrPollGeneration.current !== generation) {
+            return;
+          }
+          const newestFallback = fallbackRows.reduce<EventItem | null>((best, ev) => {
+            if (typeof ev.event_id !== "number") {
+              return best;
+            }
+            if (!best || typeof best.event_id !== "number" || ev.event_id > best.event_id) {
+              return ev;
+            }
+            return best;
+          }, null);
+          if (newestFallback && typeof newestFallback.event_id === "number") {
+            qrPollAfterEventIdRef.current = Math.max(
+              qrPollAfterEventIdRef.current ?? -1,
+              newestFallback.event_id,
+            );
+            applyIncomingEvents([newestFallback]);
+            if (latestQrEventIdRef.current > previousQrEventId) {
+              return;
+            }
+          }
+        }
       } catch {
         // ignore transient fallback polling errors
       }
@@ -458,7 +532,6 @@ export default function Home() {
       latestQrEventIdRef.current = baseline;
       qrPollAfterEventIdRef.current = baseline;
       stopQrPolling();
-      setLatestQr("");
       setQrState("waiting");
     }
     if (op === "stop" || op === "whatsapp/disconnect") {
@@ -466,7 +539,6 @@ export default function Home() {
       pairStartMinEventIdRef.current = -1;
       latestQrEventIdRef.current = -1;
       qrPollAfterEventIdRef.current = null;
-      setLatestQr("");
       setQrState("idle");
     }
     try {
@@ -716,7 +788,7 @@ export default function Home() {
             )}
 
             <h3>WhatsApp QR</h3>
-            {qrState === "waiting" && <p style={{ marginTop: 0, color: "var(--muted)" }}>Waiting for QR event...</p>}
+            {qrState === "waiting" && <p style={{ marginTop: 0, color: "var(--muted)" }}>Waiting for newer QR...</p>}
             {qrState === "timeout" && (
               <p style={{ marginTop: 0, color: "var(--danger)" }}>
                 QR was not received in time. Click <strong>Pair WhatsApp</strong> again.
@@ -727,7 +799,43 @@ export default function Home() {
                 No QR received yet.
               </div>
             ) : (
-              <textarea className="mono" readOnly value={latestQr} rows={5} />
+              <div>
+                {qrImageDataUrl ? (
+                  <img
+                    src={qrImageDataUrl}
+                    alt="WhatsApp pairing QR"
+                    style={{
+                      width: "100%",
+                      maxWidth: 320,
+                      height: "auto",
+                      border: "1px solid var(--line)",
+                      borderRadius: "0.75rem",
+                      background: "#fff",
+                      padding: "0.35rem",
+                    }}
+                  />
+                ) : (
+                  <div className="mono" style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+                    {qrRenderError ? "Unable to render QR image." : "Rendering QR image..."}
+                  </div>
+                )}
+                <p style={{ marginTop: "0.5rem", color: "var(--muted)" }}>
+                  Scan this code in WhatsApp Linked Devices.
+                </p>
+                {qrRenderError && (
+                  <p style={{ marginTop: "0.35rem", color: "var(--danger)" }}>
+                    QR render error: {qrRenderError}
+                  </p>
+                )}
+                <div className="row" style={{ marginTop: "0.35rem" }}>
+                  <button className="secondary" type="button" onClick={toggleRawQrDebug} style={{ padding: "0.35rem 0.55rem" }}>
+                    {showRawQrDebug ? "Hide Raw QR" : "Show Raw QR"}
+                  </button>
+                </div>
+                {showRawQrDebug && (
+                  <textarea className="mono" readOnly value={latestQr} rows={5} style={{ marginTop: "0.45rem" }} />
+                )}
+              </div>
             )}
 
             <h3>Live Events</h3>
