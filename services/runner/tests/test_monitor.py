@@ -166,9 +166,38 @@ def test_monitor_exits_without_runtime_error_when_container_not_running() -> Non
             return False, "Exited"
 
     monitor = TenantMonitor(publisher, DownRuntimeManager())
+    monitor.STARTUP_GRACE_SECONDS = 0.0
 
     with patch("app.monitor.websockets.connect", side_effect=OSError(111, "Connection refused")):
         asyncio.run(monitor._run("abc123"))
+
+    assert "runtime.error" not in _events(publisher)
+
+
+def test_monitor_does_not_exit_during_startup_grace_when_container_not_running() -> None:
+    publisher = DummyPublisher()
+
+    class DownRuntimeManager(DummyRuntimeManager):
+        def is_running(self, tenant_id: str) -> tuple[bool, str]:
+            del tenant_id
+            return False, "Exited"
+
+    monitor = TenantMonitor(publisher, DownRuntimeManager())
+    monitor.STARTUP_GRACE_SECONDS = 60.0
+
+    async def _fake_sleep(seconds: float) -> None:
+        del seconds
+        raise asyncio.CancelledError()
+
+    with (
+        patch("app.monitor.websockets.connect", side_effect=OSError(111, "Connection refused")),
+        patch("app.monitor.asyncio.sleep", side_effect=_fake_sleep),
+    ):
+        try:
+            asyncio.run(monitor._run("abc123"))
+            assert False, "expected monitor loop cancellation"
+        except asyncio.CancelledError:
+            pass
 
     assert "runtime.error" not in _events(publisher)
 

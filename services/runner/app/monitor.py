@@ -100,7 +100,14 @@ class TenantMonitor:
                 transient_error = self._is_transient_monitor_error(exc)
                 container_running = self._container_running(tenant_id) if transient_error else None
 
-                if transient_error and container_running is False:
+                suppress_for_startup = transient_error and not connected_once and now < startup_grace_until
+                suppress_for_reconnect = (
+                    transient_error
+                    and connected_once
+                    and last_connected_at is not None
+                    and now < (last_connected_at + self.RECONNECT_GRACE_SECONDS)
+                )
+                if transient_error and container_running is False and not (suppress_for_startup or suppress_for_reconnect):
                     logger.info(
                         "bridge monitor transient error tenant_id=%s ws_url=%s err_type=%s err=%s "
                         "container_running=%s monitor_action=suppress_not_running",
@@ -112,13 +119,6 @@ class TenantMonitor:
                     )
                     return
 
-                suppress_for_startup = transient_error and not connected_once and now < startup_grace_until
-                suppress_for_reconnect = (
-                    transient_error
-                    and connected_once
-                    and last_connected_at is not None
-                    and now < (last_connected_at + self.RECONNECT_GRACE_SECONDS)
-                )
                 if suppress_for_startup:
                     logger.info(
                         "bridge monitor transient error tenant_id=%s ws_url=%s err_type=%s err=%s "

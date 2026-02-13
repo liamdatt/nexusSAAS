@@ -350,7 +350,8 @@ class RuntimeManager:
     def clear_session_volume(self, tenant_id: str) -> None:
         self.validate_layout(tenant_id, require_existing=True)
         volume = f"tenant_{tenant_id}_session"
-        logger.info("Clearing tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
+        container = f"tenant_{tenant_id}_runtime"
+        logger.info("Recreating tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
 
         inspect_rc, inspect_out = self._run_capture(["docker", "volume", "inspect", volume])
         if inspect_rc != 0:
@@ -363,11 +364,34 @@ class RuntimeManager:
                 f"command_failed args={['docker', 'volume', 'inspect', volume]} output={inspect_out}",
             )
 
-        cleanup_cmd = "rm -rf /session/* /session/.[!.]* /session/..?*"
-        self._run(
-            ["docker", "run", "--rm", "-v", f"{volume}:/session", "busybox", "sh", "-c", cleanup_cmd]
-        )
-        logger.info("Cleared tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
+        rm_container_args = ["docker", "rm", "-f", container]
+        rm_container_rc, rm_container_out = self._run_capture(rm_container_args)
+        if rm_container_rc != 0:
+            lowered = rm_container_out.lower()
+            if "no such container" not in lowered:
+                raise RuntimeErrorManager(
+                    "docker_command_failed",
+                    f"command_failed args={rm_container_args} output={rm_container_out}",
+                )
+            logger.info(
+                "Runtime container already absent before session volume recreation tenant_id=%s container=%s",
+                tenant_id,
+                container,
+            )
+
+        rm_volume_args = ["docker", "volume", "rm", volume]
+        rm_volume_rc, rm_volume_out = self._run_capture(rm_volume_args)
+        if rm_volume_rc != 0:
+            lowered = rm_volume_out.lower()
+            if "no such volume" in lowered:
+                logger.info("Session volume already absent during recreation tenant_id=%s volume=%s", tenant_id, volume)
+                return
+            raise RuntimeErrorManager(
+                "docker_command_failed",
+                f"command_failed args={rm_volume_args} output={rm_volume_out}",
+            )
+
+        logger.info("Recreated tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
 
     def is_running(self, tenant_id: str) -> tuple[bool, str]:
         self.validate_tenant_id(tenant_id)
