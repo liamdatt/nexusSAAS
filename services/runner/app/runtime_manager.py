@@ -347,22 +347,111 @@ class RuntimeManager:
             args.append("-v")
         self._run(args)
 
-    def clear_session_volume(self, tenant_id: str) -> None:
-        self.validate_layout(tenant_id, require_existing=True)
-        volume = f"tenant_{tenant_id}_session"
-        container = f"tenant_{tenant_id}_runtime"
-        logger.info("Recreating tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
+    def _session_volume_candidates(self, tenant_id: str) -> list[str]:
+        legacy_name = f"tenant_{tenant_id}_session"
+        compose_project = self.compose_file(tenant_id).parent.name
+        prefixed_name = f"{compose_project}_{legacy_name}"
 
-        inspect_rc, inspect_out = self._run_capture(["docker", "volume", "inspect", volume])
+        candidates: list[str] = []
+        for candidate in (prefixed_name, legacy_name):
+            if candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    def _resolve_session_volume_from_mount(self, tenant_id: str, container: str) -> str | None:
+        inspect_args = ["docker", "inspect", "--format", "{{json .Mounts}}", container]
+        inspect_rc, inspect_out = self._run_capture(inspect_args)
         if inspect_rc != 0:
             lowered = inspect_out.lower()
+            if "no such container" in lowered:
+                logger.info(
+                    "Runtime container missing while resolving session volume from mounts tenant_id=%s container=%s",
+                    tenant_id,
+                    container,
+                )
+            else:
+                logger.warning(
+                    "Failed to inspect runtime container mounts tenant_id=%s container=%s output=%s",
+                    tenant_id,
+                    container,
+                    inspect_out,
+                )
+            return None
+
+        payload = ""
+        for raw_line in inspect_out.splitlines():
+            line = raw_line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                payload = line
+        if not payload:
+            payload = inspect_out.strip()
+        if not payload:
+            return None
+
+        try:
+            mounts = json.loads(payload)
+        except json.JSONDecodeError:
+            logger.warning(
+                "Failed to parse runtime container mounts while resolving session volume tenant_id=%s container=%s payload=%s",
+                tenant_id,
+                container,
+                payload,
+            )
+            return None
+
+        if not isinstance(mounts, list):
+            return None
+
+        for mount in mounts:
+            if not isinstance(mount, dict):
+                continue
+            if str(mount.get("Type", "")).lower() != "volume":
+                continue
+            if str(mount.get("Destination", "")) != "/data/session":
+                continue
+            volume_name = str(mount.get("Name", "")).strip()
+            if volume_name:
+                logger.info(
+                    "Resolved tenant session volume tenant_id=%s volume=%s source=container_mount",
+                    tenant_id,
+                    volume_name,
+                )
+                return volume_name
+        return None
+
+    def _resolve_session_volume(self, tenant_id: str, container: str) -> str | None:
+        volume = self._resolve_session_volume_from_mount(tenant_id, container)
+        if volume:
+            return volume
+
+        for candidate in self._session_volume_candidates(tenant_id):
+            inspect_args = ["docker", "volume", "inspect", candidate]
+            inspect_rc, inspect_out = self._run_capture(inspect_args)
+            if inspect_rc == 0:
+                logger.info(
+                    "Resolved tenant session volume tenant_id=%s volume=%s source=fallback",
+                    tenant_id,
+                    candidate,
+                )
+                return candidate
+            lowered = inspect_out.lower()
             if "no such volume" in lowered:
-                logger.info("Session volume not found; treating as already clean tenant_id=%s volume=%s", tenant_id, volume)
-                return
+                continue
             raise RuntimeErrorManager(
                 "docker_command_failed",
-                f"command_failed args={['docker', 'volume', 'inspect', volume]} output={inspect_out}",
+                f"command_failed args={inspect_args} output={inspect_out}",
             )
+        return None
+
+    def clear_session_volume(self, tenant_id: str) -> None:
+        self.validate_layout(tenant_id, require_existing=True)
+        container = f"tenant_{tenant_id}_runtime"
+        volume = self._resolve_session_volume(tenant_id, container)
+        if not volume:
+            logger.info("Session volume not found; treating as already clean tenant_id=%s", tenant_id)
+            return
+
+        logger.info("Recreating tenant session volume tenant_id=%s volume=%s", tenant_id, volume)
 
         rm_container_args = ["docker", "rm", "-f", container]
         rm_container_rc, rm_container_out = self._run_capture(rm_container_args)

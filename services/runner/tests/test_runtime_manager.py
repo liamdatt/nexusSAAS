@@ -298,11 +298,20 @@ def test_clear_session_volume_treats_missing_volume_as_clean(tmp_path: Path, mon
     manager.write_compose("abc123", "ghcr.io/test/image:1")
 
     with patch("app.runtime_manager.subprocess.run") as run_mock:
-        run_mock.return_value = _proc(returncode=1, stderr="Error: No such volume: tenant_abc123_session")
+        run_mock.side_effect = [
+            _proc(returncode=1, stderr="Error: No such container: tenant_abc123_runtime"),
+            _proc(returncode=1, stderr="Error: No such volume: abc123_tenant_abc123_session"),
+            _proc(returncode=1, stderr="Error: No such volume: tenant_abc123_session"),
+        ]
         manager.clear_session_volume("abc123")
 
-    assert run_mock.call_count == 1
-    assert run_mock.call_args.args[0] == ["docker", "volume", "inspect", "tenant_abc123_session"]
+    assert run_mock.call_count == 3
+    inspect_mount_args = run_mock.call_args_list[0].args[0]
+    inspect_prefixed_args = run_mock.call_args_list[1].args[0]
+    inspect_legacy_args = run_mock.call_args_list[2].args[0]
+    assert inspect_mount_args == ["docker", "inspect", "--format", "{{json .Mounts}}", "tenant_abc123_runtime"]
+    assert inspect_prefixed_args == ["docker", "volume", "inspect", "abc123_tenant_abc123_session"]
+    assert inspect_legacy_args == ["docker", "volume", "inspect", "tenant_abc123_session"]
 
 
 def test_clear_session_volume_recreates_volume(tmp_path: Path, monkeypatch) -> None:
@@ -319,17 +328,25 @@ def test_clear_session_volume_recreates_volume(tmp_path: Path, monkeypatch) -> N
     manager = RuntimeManager()
     manager.write_compose("abc123", "ghcr.io/test/image:1")
 
+    resolved_volume = "f8407c633f28f451_tenant_abc123_session"
     with patch("app.runtime_manager.subprocess.run") as run_mock:
-        run_mock.side_effect = [_proc(returncode=0), _proc(returncode=0), _proc(returncode=0)]
+        run_mock.side_effect = [
+            _proc(
+                returncode=0,
+                stdout=f'[{{"Type":"volume","Name":"{resolved_volume}","Destination":"/data/session"}}]',
+            ),
+            _proc(returncode=0),
+            _proc(returncode=0),
+        ]
         manager.clear_session_volume("abc123")
 
     assert run_mock.call_count == 3
-    inspect_args = run_mock.call_args_list[0].args[0]
+    inspect_mount_args = run_mock.call_args_list[0].args[0]
     rm_container_args = run_mock.call_args_list[1].args[0]
     rm_volume_args = run_mock.call_args_list[2].args[0]
-    assert inspect_args == ["docker", "volume", "inspect", "tenant_abc123_session"]
+    assert inspect_mount_args == ["docker", "inspect", "--format", "{{json .Mounts}}", "tenant_abc123_runtime"]
     assert rm_container_args == ["docker", "rm", "-f", "tenant_abc123_runtime"]
-    assert rm_volume_args == ["docker", "volume", "rm", "tenant_abc123_session"]
+    assert rm_volume_args == ["docker", "volume", "rm", resolved_volume]
 
 
 def test_clear_session_volume_tolerates_missing_runtime_container(tmp_path: Path, monkeypatch) -> None:
@@ -348,15 +365,18 @@ def test_clear_session_volume_tolerates_missing_runtime_container(tmp_path: Path
 
     with patch("app.runtime_manager.subprocess.run") as run_mock:
         run_mock.side_effect = [
+            _proc(returncode=1, stderr="Error: No such container: tenant_abc123_runtime"),
             _proc(returncode=0),
             _proc(returncode=1, stderr="Error: No such container: tenant_abc123_runtime"),
             _proc(returncode=0),
         ]
         manager.clear_session_volume("abc123")
 
-    assert run_mock.call_count == 3
-    rm_volume_args = run_mock.call_args_list[2].args[0]
-    assert rm_volume_args == ["docker", "volume", "rm", "tenant_abc123_session"]
+    assert run_mock.call_count == 4
+    inspect_prefixed_args = run_mock.call_args_list[1].args[0]
+    rm_volume_args = run_mock.call_args_list[3].args[0]
+    assert inspect_prefixed_args == ["docker", "volume", "inspect", "abc123_tenant_abc123_session"]
+    assert rm_volume_args == ["docker", "volume", "rm", "abc123_tenant_abc123_session"]
 
 
 def test_clear_session_volume_raises_when_volume_delete_fails(tmp_path: Path, monkeypatch) -> None:
@@ -373,9 +393,13 @@ def test_clear_session_volume_raises_when_volume_delete_fails(tmp_path: Path, mo
     manager = RuntimeManager()
     manager.write_compose("abc123", "ghcr.io/test/image:1")
 
+    resolved_volume = "f8407c633f28f451_tenant_abc123_session"
     with patch("app.runtime_manager.subprocess.run") as run_mock:
         run_mock.side_effect = [
-            _proc(returncode=0),
+            _proc(
+                returncode=0,
+                stdout=f'[{{"Type":"volume","Name":"{resolved_volume}","Destination":"/data/session"}}]',
+            ),
             _proc(returncode=0),
             _proc(returncode=1, stderr="Error response from daemon: volume is in use"),
         ]
