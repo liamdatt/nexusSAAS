@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 class TenantMonitor:
     STARTUP_GRACE_SECONDS = 15.0
+    RECONNECT_GRACE_SECONDS = 20.0
     RUNTIME_ERROR_COOLDOWN_SECONDS = 10.0
+    MAX_BACKOFF_SECONDS = 30.0
 
     def __init__(self, publisher: EventPublisher, runtime_manager: RuntimeManager) -> None:
         self.publisher = publisher
@@ -24,10 +26,16 @@ class TenantMonitor:
         self._tasks: dict[str, asyncio.Task] = {}
 
     def active_count(self) -> int:
-        return len([t for t in self._tasks.values() if not t.done()])
+        self._prune_done_tasks()
+        return len(self._tasks)
+
+    def monitored_tenant_ids(self) -> set[str]:
+        self._prune_done_tasks()
+        return set(self._tasks.keys())
 
     async def start(self, tenant_id: str) -> None:
-        if tenant_id in self._tasks and not self._tasks[tenant_id].done():
+        self._prune_done_tasks()
+        if tenant_id in self._tasks:
             return
         self._tasks[tenant_id] = asyncio.create_task(self._run(tenant_id))
 
@@ -44,10 +52,23 @@ class TenantMonitor:
         for tenant_id in list(self._tasks.keys()):
             await self.stop(tenant_id)
 
+    def _prune_done_tasks(self) -> None:
+        for tenant_id, task in list(self._tasks.items()):
+            if task.done():
+                self._tasks.pop(tenant_id, None)
+
+    def _container_running(self, tenant_id: str) -> bool | None:
+        try:
+            running, _ = self.runtime_manager.is_running(tenant_id)
+            return running
+        except Exception:  # noqa: BLE001
+            return None
+
     async def _run(self, tenant_id: str) -> None:
         ws_url = self.runtime_manager.bridge_ws_url(tenant_id)
         backoff_seconds = 1.0
         connected_once = False
+        last_connected_at: float | None = None
         startup_grace_until = monotonic() + self.STARTUP_GRACE_SECONDS
         next_runtime_error_at = 0.0
         while True:
@@ -66,6 +87,7 @@ class TenantMonitor:
                         "secret_header" if headers else "none",
                     )
                     connected_once = True
+                    last_connected_at = monotonic()
                     backoff_seconds = 1.0
                     await self.publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
                     async for raw in ws:
@@ -74,23 +96,62 @@ class TenantMonitor:
                 raise
             except Exception as exc:  # noqa: BLE001
                 now = monotonic()
+                err_type = type(exc).__name__
                 transient_error = self._is_transient_monitor_error(exc)
-                logger.warning(
-                    "bridge monitor error tenant_id=%s ws_url=%s err_type=%s err=%s",
-                    tenant_id,
-                    ws_url,
-                    type(exc).__name__,
-                    exc,
-                )
+                container_running = self._container_running(tenant_id) if transient_error else None
+
+                if transient_error and container_running is False:
+                    logger.info(
+                        "bridge monitor transient error tenant_id=%s ws_url=%s err_type=%s err=%s "
+                        "container_running=%s monitor_action=suppress_not_running",
+                        tenant_id,
+                        ws_url,
+                        err_type,
+                        exc,
+                        container_running,
+                    )
+                    return
+
                 suppress_for_startup = transient_error and not connected_once and now < startup_grace_until
+                suppress_for_reconnect = (
+                    transient_error
+                    and connected_once
+                    and last_connected_at is not None
+                    and now < (last_connected_at + self.RECONNECT_GRACE_SECONDS)
+                )
                 if suppress_for_startup:
                     logger.info(
-                        "bridge monitor startup grace active tenant_id=%s err_type=%s retry_in_seconds=%s",
+                        "bridge monitor transient error tenant_id=%s ws_url=%s err_type=%s err=%s "
+                        "container_running=%s monitor_action=suppress_grace grace_scope=startup retry_in_seconds=%s",
                         tenant_id,
-                        type(exc).__name__,
+                        ws_url,
+                        err_type,
+                        exc,
+                        container_running,
+                        backoff_seconds,
+                    )
+                elif suppress_for_reconnect:
+                    logger.info(
+                        "bridge monitor transient error tenant_id=%s ws_url=%s err_type=%s err=%s "
+                        "container_running=%s monitor_action=suppress_grace grace_scope=reconnect retry_in_seconds=%s",
+                        tenant_id,
+                        ws_url,
+                        err_type,
+                        exc,
+                        container_running,
                         backoff_seconds,
                     )
                 elif now >= next_runtime_error_at:
+                    logger.warning(
+                        "bridge monitor error tenant_id=%s ws_url=%s err_type=%s err=%s "
+                        "container_running=%s monitor_action=emit_runtime_error retry_in_seconds=%s",
+                        tenant_id,
+                        ws_url,
+                        err_type,
+                        exc,
+                        container_running,
+                        backoff_seconds,
+                    )
                     await self.publisher.publish(
                         tenant_id,
                         "runtime.error",
@@ -99,13 +160,17 @@ class TenantMonitor:
                     next_runtime_error_at = now + self.RUNTIME_ERROR_COOLDOWN_SECONDS
                 else:
                     logger.debug(
-                        "bridge monitor runtime.error throttled tenant_id=%s err_type=%s next_emit_in=%.2f",
+                        "bridge monitor transient error tenant_id=%s ws_url=%s err_type=%s err=%s "
+                        "container_running=%s monitor_action=retry next_emit_in=%.2f",
                         tenant_id,
-                        type(exc).__name__,
+                        ws_url,
+                        err_type,
+                        exc,
+                        container_running,
                         max(next_runtime_error_at - now, 0.0),
                     )
                 await asyncio.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2.0, 30.0)
+                backoff_seconds = min(backoff_seconds * 2.0, self.MAX_BACKOFF_SECONDS)
 
     async def _handle_message(self, tenant_id: str, raw: str) -> None:
         try:

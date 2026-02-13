@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
@@ -20,6 +21,7 @@ runtime_manager = RuntimeManager()
 monitor = TenantMonitor(publisher, runtime_manager)
 reconcile_task: asyncio.Task | None = None
 last_reconcile_at: datetime | None = None
+logger = logging.getLogger(__name__)
 
 
 def _runtime_http_error(exc: RuntimeErrorManager) -> HTTPException:
@@ -54,16 +56,26 @@ async def _reconcile_loop() -> None:
         except RuntimeErrorManager:
             pass
 
+        running_tenant_ids: set[str] = set()
         for tenant_id in sorted(tenant_ids):
             try:
                 running, status_text = runtime_manager.is_running(tenant_id)
             except RuntimeErrorManager:
                 continue
             if running:
+                running_tenant_ids.add(tenant_id)
                 await monitor.start(tenant_id)
                 await publisher.publish(tenant_id, "runtime.status", {"state": "running", "status": status_text})
             else:
                 await publisher.publish(tenant_id, "runtime.status", {"state": "paused", "status": status_text})
+
+        stale_monitors = sorted(monitor.monitored_tenant_ids() - running_tenant_ids)
+        for tenant_id in stale_monitors:
+            logger.info(
+                "runner reconcile stopping stale monitor tenant_id=%s monitor_action=stop_stale",
+                tenant_id,
+            )
+            await monitor.stop(tenant_id)
 
         last_reconcile_at = datetime.now(UTC)
         await asyncio.sleep(30)
@@ -166,6 +178,7 @@ async def start_tenant(
 async def stop_tenant(tenant_id: str, authorization: str | None = Header(default=None)) -> GenericResponse:
     require_internal_auth(tenant_id, "stop", authorization)
     try:
+        await monitor.stop(tenant_id)
         runtime_manager.compose_stop(tenant_id)
         await publisher.publish(tenant_id, "runtime.status", {"state": "paused"})
     except RuntimeErrorManager as exc:
