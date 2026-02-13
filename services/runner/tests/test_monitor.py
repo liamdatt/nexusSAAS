@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from unittest.mock import patch
 
 from app.monitor import TenantMonitor
 
@@ -16,6 +18,10 @@ class DummyPublisher:
 class DummyRuntimeManager:
     def bridge_ws_url(self, tenant_id: str) -> str:
         return f"ws://tenant_{tenant_id}_runtime:8765"
+
+    def bridge_ws_headers(self, tenant_id: str) -> dict[str, str] | None:
+        del tenant_id
+        return None
 
 
 def _events(publisher: DummyPublisher) -> list[str]:
@@ -65,3 +71,49 @@ def test_monitor_inbound_message_marks_connected() -> None:
     asyncio.run(monitor._handle_message("abc123", '{"event":"bridge.inbound_message","payload":{"id":"m1"}}'))
     assert _events(publisher) == ["whatsapp.connected", "runtime.status"]
     assert publisher.items[1][2]["state"] == "running"
+
+
+def test_monitor_connects_with_bridge_secret_header() -> None:
+    publisher = DummyPublisher()
+
+    class SecretRuntimeManager(DummyRuntimeManager):
+        def bridge_ws_headers(self, tenant_id: str) -> dict[str, str] | None:
+            del tenant_id
+            return {"x-nexus-secret": "bridge-secret"}
+
+    monitor = TenantMonitor(publisher, SecretRuntimeManager())
+
+    class _HangingWS:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.sleep(3600)
+            raise StopAsyncIteration
+
+    class _ConnectCtx:
+        async def __aenter__(self):
+            return _HangingWS()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def _exercise() -> dict | None:
+        captured: dict | None = None
+
+        def _fake_connect(url: str, **kwargs):
+            del url
+            nonlocal captured
+            captured = kwargs.get("additional_headers")
+            return _ConnectCtx()
+
+        with patch("app.monitor.websockets.connect", side_effect=_fake_connect):
+            task = asyncio.create_task(monitor._run("abc123"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        return captured
+
+    headers = asyncio.run(_exercise())
+    assert headers == {"x-nexus-secret": "bridge-secret"}

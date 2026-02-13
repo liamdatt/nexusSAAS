@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -14,6 +15,8 @@ from sqlalchemy.orm import sessionmaker
 from app.config import get_settings
 from app.models import RuntimeEvent, Tenant, TenantRuntime
 
+logger = logging.getLogger(__name__)
+
 
 class EventManager:
     def __init__(self, db_session_factory: sessionmaker) -> None:
@@ -24,14 +27,6 @@ class EventManager:
         self._consume_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        self._redis = redis.from_url(self.settings.redis_url, decode_responses=True)
-        try:
-            await self._redis.ping()
-        except Exception:  # noqa: BLE001
-            # Redis can be unavailable in local/dev runs. Fall back to direct in-process fanout.
-            await self._redis.close()
-            self._redis = None
-            return
         self._consume_task = asyncio.create_task(self._consume_supervisor())
 
     async def stop(self) -> None:
@@ -39,8 +34,7 @@ class EventManager:
             self._consume_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._consume_task
-        if self._redis is not None:
-            await self._redis.close()
+        await self._disconnect_redis()
 
     async def register(self, tenant_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -81,24 +75,39 @@ class EventManager:
             "payload": payload,
             "created_at": datetime.now(UTC).isoformat(),
         }
+        if self._redis is None:
+            await self._connect_redis()
         if self._redis is not None:
             try:
                 await self._redis.publish(f"tenant:{tenant_id}:events", json.dumps(event))
                 return
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 # Fall through to in-process persistence/broadcast if publish fails.
-                pass
+                logger.warning(
+                    "events redis publish failed tenant_id=%s event_type=%s err_type=%s err=%s",
+                    tenant_id,
+                    event_type,
+                    type(exc).__name__,
+                    exc,
+                )
+                await self._disconnect_redis()
         await self._persist_and_broadcast(event)
 
     async def _consume_supervisor(self) -> None:
         backoff = 1.0
         while True:
             try:
+                if not await self._connect_redis():
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2.0, 30.0)
+                    continue
                 await self._consume_once()
                 backoff = 1.0
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("events redis consume loop error err_type=%s err=%s", type(exc).__name__, exc)
+                await self._disconnect_redis()
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
 
@@ -109,6 +118,7 @@ class EventManager:
         pubsub = self._redis.pubsub()
         try:
             await pubsub.psubscribe("tenant:*:events")
+            logger.info("events redis subscription established pattern=tenant:*:events")
             while True:
                 msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if not msg:
@@ -124,6 +134,35 @@ class EventManager:
                 await self._persist_and_broadcast(parsed)
         finally:
             await pubsub.close()
+
+    async def _connect_redis(self) -> bool:
+        if self._redis is not None:
+            try:
+                await self._redis.ping()
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("events redis ping failed err_type=%s err=%s", type(exc).__name__, exc)
+                await self._disconnect_redis()
+
+        client = redis.from_url(self.settings.redis_url, decode_responses=True)
+        try:
+            await client.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("events redis connect failed err_type=%s err=%s", type(exc).__name__, exc)
+            await client.close()
+            return False
+        self._redis = client
+        logger.info("events redis connected")
+        return True
+
+    async def _disconnect_redis(self) -> None:
+        if self._redis is None:
+            return
+        try:
+            await self._redis.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._redis = None
 
     def _row_to_wire(self, row: RuntimeEvent) -> dict:
         created_at = row.created_at.isoformat() if row.created_at else datetime.now(UTC).isoformat()

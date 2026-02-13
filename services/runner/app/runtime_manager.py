@@ -26,6 +26,7 @@ class RuntimeManager:
     LEGACY_CONFIG_RO_MOUNT = ":/data/config:ro"
     CONFIG_RW_MOUNT = ":/data/config"
     NEXUS_IMAGE_PLACEHOLDERS = ("replace_with", "your-org", "<org>")
+    BRIDGE_SHARED_SECRET_KEY = "BRIDGE_SHARED_SECRET"
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -108,8 +109,15 @@ class RuntimeManager:
 
     def write_runtime_env(self, tenant_id: str, values: dict[str, str]) -> Path:
         self.ensure_layout(tenant_id)
-        defaults = self._default_runtime_env(values)
-        defaults.update(values)
+        merged_values = dict(values)
+        if self.BRIDGE_SHARED_SECRET_KEY not in merged_values:
+            existing_env = self.read_runtime_env(tenant_id)
+            existing_secret = (existing_env.get(self.BRIDGE_SHARED_SECRET_KEY) or "").strip()
+            if existing_secret:
+                merged_values[self.BRIDGE_SHARED_SECRET_KEY] = existing_secret
+
+        defaults = self._default_runtime_env(merged_values)
+        defaults.update(merged_values)
 
         path = self.runtime_env_file(tenant_id)
         lines: list[str] = []
@@ -118,6 +126,29 @@ class RuntimeManager:
             lines.append(f"{k}={rendered}")
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
+
+    def read_runtime_env(self, tenant_id: str) -> dict[str, str]:
+        path = self.runtime_env_file(tenant_id)
+        if not path.exists():
+            return {}
+        values: dict[str, str] = {}
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            values[key] = value.replace("\\n", "\n")
+        return values
 
     def _default_runtime_env(self, values: dict[str, str]) -> dict[str, str]:
         defaults = {
@@ -191,6 +222,12 @@ class RuntimeManager:
     def bridge_ws_url(self, tenant_id: str) -> str:
         self.validate_tenant_id(tenant_id)
         return f"ws://tenant_{tenant_id}_runtime:{self.settings.bridge_port}"
+
+    def bridge_ws_headers(self, tenant_id: str) -> dict[str, str] | None:
+        secret = (self.read_runtime_env(tenant_id).get(self.BRIDGE_SHARED_SECRET_KEY) or "").strip()
+        if not secret:
+            return None
+        return {"x-nexus-secret": secret}
 
     def _run(self, args: list[str], *, check: bool = True) -> str:
         try:

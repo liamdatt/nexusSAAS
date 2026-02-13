@@ -47,6 +47,26 @@ def test_runtime_files_render(tmp_path: Path, monkeypatch) -> None:
     assert list(manager.skills_dir("abc123").glob("*.md")) == [manager.skills_dir("abc123") / "alpha.md"]
 
 
+def test_write_runtime_env_preserves_bridge_secret_when_omitted(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("BRIDGE_SHARED_SECRET=${BRIDGE_SHARED_SECRET}\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.write_runtime_env("abc123", {"BRIDGE_SHARED_SECRET": "secret-v1", "NEXUS_OPENROUTER_API_KEY": "key-v1"})
+    manager.write_runtime_env("abc123", {"NEXUS_OPENROUTER_API_KEY": "key-v2"})
+
+    rendered = manager.read_runtime_env("abc123")
+    assert rendered["BRIDGE_SHARED_SECRET"] == "secret-v1"
+    assert rendered["NEXUS_OPENROUTER_API_KEY"] == "key-v2"
+
+
 def test_invalid_prompt_or_skill_identifier_rejected(tmp_path: Path, monkeypatch) -> None:
     compose_template = tmp_path / "compose.tmpl"
     env_template = tmp_path / "env.tmpl"

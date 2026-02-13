@@ -45,7 +45,19 @@ class TenantMonitor:
         backoff_seconds = 1.0
         while True:
             try:
-                async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
+                headers = self.runtime_manager.bridge_ws_headers(tenant_id)
+                async with websockets.connect(
+                    ws_url,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    additional_headers=headers,
+                ) as ws:
+                    logger.info(
+                        "bridge monitor connected tenant_id=%s ws_url=%s auth=%s",
+                        tenant_id,
+                        ws_url,
+                        "secret_header" if headers else "none",
+                    )
                     backoff_seconds = 1.0
                     await self.publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
                     async for raw in ws:
@@ -53,7 +65,13 @@ class TenantMonitor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("bridge monitor error tenant_id=%s ws_url=%s err=%s", tenant_id, ws_url, exc)
+                logger.warning(
+                    "bridge monitor error tenant_id=%s ws_url=%s err_type=%s err=%s",
+                    tenant_id,
+                    ws_url,
+                    type(exc).__name__,
+                    exc,
+                )
                 await self.publisher.publish(
                     tenant_id,
                     "runtime.error",
@@ -78,6 +96,13 @@ class TenantMonitor:
 
         if event == "bridge.qr":
             qr_payload = payload or self._extract_qr_payload(envelope)
+            qr = qr_payload.get("qr") if isinstance(qr_payload, dict) else None
+            logger.info(
+                "bridge qr event tenant_id=%s has_qr=%s qr_length=%s",
+                tenant_id,
+                isinstance(qr, str) and bool(qr),
+                len(qr) if isinstance(qr, str) else 0,
+            )
             await self.publisher.publish(tenant_id, "whatsapp.qr", qr_payload)
         elif event == "bridge.connected":
             await self.publisher.publish(tenant_id, "whatsapp.connected", payload)
