@@ -114,6 +114,9 @@ export default function Home() {
   const tenantBootstrapAttemptedToken = useRef<string | null>(null);
   const latestEventIdRef = useRef<number | null>(null);
   const qrPollGeneration = useRef(0);
+  const pairStartMinEventIdRef = useRef<number>(-1);
+  const latestQrEventIdRef = useRef<number>(-1);
+  const qrPollAfterEventIdRef = useRef<number | null>(null);
 
   function stopQrPolling() {
     qrPollGeneration.current += 1;
@@ -126,10 +129,33 @@ export default function Home() {
         latestEventIdRef.current = Math.max(latestEventIdRef.current ?? 0, ev.event_id);
       }
       const qr = ev.type === "whatsapp.qr" ? extractQr(ev.payload) : "";
-      if (qr) {
-        setLatestQr(qr);
-        setQrState("ready");
-        stopQrPolling();
+      if (!qr) {
+        continue;
+      }
+
+      const eventId = ev.event_id;
+      const pairBaseline = pairStartMinEventIdRef.current;
+      if (pairBaseline >= 0) {
+        // During an active pair session, only accept strictly newer QR events with an event id.
+        if (typeof eventId !== "number") {
+          continue;
+        }
+        if (eventId <= pairBaseline || eventId <= latestQrEventIdRef.current) {
+          continue;
+        }
+      } else if (typeof eventId === "number" && eventId <= latestQrEventIdRef.current) {
+        continue;
+      }
+
+      if (typeof eventId === "number") {
+        latestQrEventIdRef.current = eventId;
+      }
+      setLatestQr(qr);
+      setQrState("ready");
+      stopQrPolling();
+
+      if (typeof eventId === "number") {
+        qrPollAfterEventIdRef.current = Math.max(qrPollAfterEventIdRef.current ?? 0, eventId);
       }
     }
     setEvents((prev) => mergeEvents(prev, incoming));
@@ -154,6 +180,9 @@ export default function Home() {
     setError("");
     tenantBootstrapAttemptedToken.current = null;
     latestEventIdRef.current = null;
+    pairStartMinEventIdRef.current = -1;
+    latestQrEventIdRef.current = -1;
+    qrPollAfterEventIdRef.current = null;
   }
 
   useEffect(() => {
@@ -226,6 +255,9 @@ export default function Home() {
   useEffect(() => {
     stopQrPolling();
     latestEventIdRef.current = null;
+    pairStartMinEventIdRef.current = -1;
+    latestQrEventIdRef.current = -1;
+    qrPollAfterEventIdRef.current = null;
     setEvents([]);
     setLatestQr("");
     setQrState("idle");
@@ -385,23 +417,25 @@ export default function Home() {
 
     while (qrPollGeneration.current === generation && Date.now() < deadline) {
       try {
+        const previousQrEventId = latestQrEventIdRef.current;
         const rows = await loadRecentEvents(id, token, {
           limit: 50,
-          afterEventId: latestEventIdRef.current,
+          afterEventId: qrPollAfterEventIdRef.current,
           types: ["whatsapp.qr"],
         });
         if (qrPollGeneration.current !== generation) {
           return;
         }
-        const qrEvent = rows.find((ev) => ev.type === "whatsapp.qr" && Boolean(extractQr(ev.payload)));
-        if (qrEvent) {
-          const qr = extractQr(qrEvent.payload);
-          if (qr) {
-            setLatestQr(qr);
-            setQrState("ready");
-            stopQrPolling();
-            return;
-          }
+        const maxSeenEventId = rows.reduce<number>(
+          (maxId, ev) => (typeof ev.event_id === "number" ? Math.max(maxId, ev.event_id) : maxId),
+          qrPollAfterEventIdRef.current ?? -1,
+        );
+        if (maxSeenEventId >= 0) {
+          qrPollAfterEventIdRef.current = maxSeenEventId;
+        }
+
+        if (latestQrEventIdRef.current > previousQrEventId) {
+          return;
         }
       } catch {
         // ignore transient fallback polling errors
@@ -419,12 +453,20 @@ export default function Home() {
     setBusy(true);
     setError("");
     if (op === "pair/start") {
+      const baseline = latestEventIdRef.current ?? 0;
+      pairStartMinEventIdRef.current = baseline;
+      latestQrEventIdRef.current = baseline;
+      qrPollAfterEventIdRef.current = baseline;
       stopQrPolling();
       setLatestQr("");
       setQrState("waiting");
     }
     if (op === "stop" || op === "whatsapp/disconnect") {
       stopQrPolling();
+      pairStartMinEventIdRef.current = -1;
+      latestQrEventIdRef.current = -1;
+      qrPollAfterEventIdRef.current = null;
+      setLatestQr("");
       setQrState("idle");
     }
     try {
