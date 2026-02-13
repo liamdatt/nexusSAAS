@@ -33,7 +33,10 @@ type EventItem = {
   type: string;
   created_at?: string;
   payload?: Record<string, unknown>;
+  source?: EventSource;
 };
+
+type EventSource = "ws" | "poll_incremental" | "poll_latest";
 
 type ConfigRow = {
   id: string;
@@ -121,10 +124,24 @@ export default function Home() {
   const pairStartMinEventIdRef = useRef<number>(-1);
   const latestQrEventIdRef = useRef<number>(-1);
   const qrPollAfterEventIdRef = useRef<number | null>(null);
+  const pairStartQrTokenRef = useRef<string>("");
+  const pairCompatAcceptedRef = useRef<boolean>(false);
+  const latestQrTokenRef = useRef<string>("");
+  const qrStateRef = useRef<"idle" | "waiting" | "ready" | "timeout">("idle");
   const qrRenderGenerationRef = useRef(0);
 
   function stopQrPolling() {
     qrPollGeneration.current += 1;
+  }
+
+  function setTrackedQr(value: string) {
+    latestQrTokenRef.current = value;
+    setLatestQr(value);
+  }
+
+  function setTrackedQrState(value: "idle" | "waiting" | "ready" | "timeout") {
+    qrStateRef.current = value;
+    setQrState(value);
   }
 
   function toggleRawQrDebug() {
@@ -144,23 +161,37 @@ export default function Home() {
 
       const eventId = ev.event_id;
       const pairBaseline = pairStartMinEventIdRef.current;
-      if (pairBaseline >= 0) {
+      const inPairFlow = pairBaseline >= 0;
+      if (inPairFlow && typeof eventId === "number") {
         // During an active pair session, only accept strictly newer QR events with an event id.
-        if (typeof eventId !== "number") {
-          continue;
-        }
         if (eventId <= pairBaseline || eventId <= latestQrEventIdRef.current) {
           continue;
         }
-      } else if (typeof eventId === "number" && eventId <= latestQrEventIdRef.current) {
+      } else if (inPairFlow && typeof eventId !== "number") {
+        // Compatibility path for mixed deployments where websocket events may lack event_id.
+        if (qrStateRef.current !== "waiting") {
+          continue;
+        }
+        if (pairCompatAcceptedRef.current) {
+          continue;
+        }
+        if (qr === pairStartQrTokenRef.current) {
+          continue;
+        }
+        if (qr === latestQrTokenRef.current) {
+          continue;
+        }
+        pairCompatAcceptedRef.current = true;
+      } else if (!inPairFlow && qr === latestQrTokenRef.current) {
+        // Outside pair flow, keep permissive updates while suppressing duplicate token churn.
         continue;
       }
 
       if (typeof eventId === "number") {
         latestQrEventIdRef.current = eventId;
       }
-      setLatestQr(qr);
-      setQrState("ready");
+      setTrackedQr(qr);
+      setTrackedQrState("ready");
       stopQrPolling();
 
       if (typeof eventId === "number") {
@@ -182,8 +213,8 @@ export default function Home() {
     setPrompts([]);
     setSkills([]);
     setEvents([]);
-    setLatestQr("");
-    setQrState("idle");
+    setTrackedQr("");
+    setTrackedQrState("idle");
     setOpenrouterKeyInput("");
     setRequiresOpenRouterKey(false);
     setError("");
@@ -192,6 +223,8 @@ export default function Home() {
     pairStartMinEventIdRef.current = -1;
     latestQrEventIdRef.current = -1;
     qrPollAfterEventIdRef.current = null;
+    pairStartQrTokenRef.current = "";
+    pairCompatAcceptedRef.current = false;
   }
 
   useEffect(() => {
@@ -281,7 +314,7 @@ export default function Home() {
       if (parsed.tenant_id && parsed.tenant_id !== tenantId) {
         return;
       }
-      applyIncomingEvents([parsed]);
+      applyIncomingEvents([{ ...parsed, source: "ws" }]);
       if (parsed.type === "runtime.status" && tenantId) {
         void fetchStatus(tenantId, tokens.access_token);
       }
@@ -300,11 +333,13 @@ export default function Home() {
     pairStartMinEventIdRef.current = -1;
     latestQrEventIdRef.current = -1;
     qrPollAfterEventIdRef.current = null;
+    pairStartQrTokenRef.current = "";
+    pairCompatAcceptedRef.current = false;
     setEvents([]);
-    setLatestQr("");
-    setQrState("idle");
+    setTrackedQr("");
+    setTrackedQrState("idle");
     if (tenantId && tokens) {
-      void loadRecentEvents(tenantId, tokens.access_token, { limit: 20 });
+      void loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
     }
     // Tenant changes should reset stream state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -434,6 +469,7 @@ export default function Home() {
   async function loadRecentEvents(
     id: string,
     token: string,
+    source: EventSource,
     options: { limit?: number; afterEventId?: number | null; types?: string[] } = {},
   ) {
     const params = new URLSearchParams();
@@ -447,21 +483,22 @@ export default function Home() {
     const query = params.toString();
     const path = `/v1/tenants/${id}/events/recent${query ? `?${query}` : ""}`;
     const rows = await api<EventItem[]>(path, {}, token);
-    applyIncomingEvents(rows);
+    applyIncomingEvents(rows.map((row) => ({ ...row, source })));
     return rows;
   }
 
   async function pollForQr(id: string, token: string) {
     const generation = qrPollGeneration.current + 1;
     qrPollGeneration.current = generation;
-    setQrState("waiting");
+    setTrackedQrState("waiting");
     const deadline = Date.now() + 90_000;
     let idleCycles = 0;
 
     while (qrPollGeneration.current === generation && Date.now() < deadline) {
       try {
         const previousQrEventId = latestQrEventIdRef.current;
-        const rows = await loadRecentEvents(id, token, {
+        const previousQrToken = latestQrTokenRef.current;
+        const rows = await loadRecentEvents(id, token, "poll_incremental", {
           limit: 50,
           afterEventId: qrPollAfterEventIdRef.current,
           types: ["whatsapp.qr"],
@@ -477,38 +514,32 @@ export default function Home() {
           qrPollAfterEventIdRef.current = maxSeenEventId;
         }
 
-        if (latestQrEventIdRef.current > previousQrEventId) {
+        if (latestQrEventIdRef.current > previousQrEventId || latestQrTokenRef.current !== previousQrToken) {
           return;
         }
 
         idleCycles += 1;
         if (idleCycles >= 3) {
           idleCycles = 0;
-          const fallbackRows = await loadRecentEvents(id, token, {
+          const fallbackRows = await loadRecentEvents(id, token, "poll_latest", {
             limit: 1,
             types: ["whatsapp.qr"],
           });
           if (qrPollGeneration.current !== generation) {
             return;
           }
-          const newestFallback = fallbackRows.reduce<EventItem | null>((best, ev) => {
-            if (typeof ev.event_id !== "number") {
-              return best;
-            }
-            if (!best || typeof best.event_id !== "number" || ev.event_id > best.event_id) {
-              return ev;
-            }
-            return best;
-          }, null);
-          if (newestFallback && typeof newestFallback.event_id === "number") {
+          const newestFallbackEventId = fallbackRows.reduce<number>(
+            (maxId, ev) => (typeof ev.event_id === "number" ? Math.max(maxId, ev.event_id) : maxId),
+            qrPollAfterEventIdRef.current ?? -1,
+          );
+          if (newestFallbackEventId >= 0) {
             qrPollAfterEventIdRef.current = Math.max(
               qrPollAfterEventIdRef.current ?? -1,
-              newestFallback.event_id,
+              newestFallbackEventId,
             );
-            applyIncomingEvents([newestFallback]);
-            if (latestQrEventIdRef.current > previousQrEventId) {
-              return;
-            }
+          }
+          if (latestQrEventIdRef.current > previousQrEventId || latestQrTokenRef.current !== previousQrToken) {
+            return;
           }
         }
       } catch {
@@ -518,7 +549,7 @@ export default function Home() {
     }
 
     if (qrPollGeneration.current === generation) {
-      setQrState("timeout");
+      setTrackedQrState("timeout");
     }
   }
 
@@ -531,15 +562,19 @@ export default function Home() {
       pairStartMinEventIdRef.current = baseline;
       latestQrEventIdRef.current = baseline;
       qrPollAfterEventIdRef.current = baseline;
+      pairStartQrTokenRef.current = latestQrTokenRef.current;
+      pairCompatAcceptedRef.current = false;
       stopQrPolling();
-      setQrState("waiting");
+      setTrackedQrState("waiting");
     }
     if (op === "stop" || op === "whatsapp/disconnect") {
       stopQrPolling();
       pairStartMinEventIdRef.current = -1;
       latestQrEventIdRef.current = -1;
       qrPollAfterEventIdRef.current = null;
-      setQrState("idle");
+      pairStartQrTokenRef.current = "";
+      pairCompatAcceptedRef.current = false;
+      setTrackedQrState("idle");
     }
     try {
       let mapped = `/v1/tenants/${tenantId}/runtime/${op}`;
@@ -557,7 +592,7 @@ export default function Home() {
     } catch (err) {
       setError((err as Error).message);
       if (op === "pair/start") {
-        setQrState("timeout");
+        setTrackedQrState("timeout");
       }
     } finally {
       setBusy(false);
@@ -841,9 +876,12 @@ export default function Home() {
             <h3>Live Events</h3>
             <div className="events mono">
               {events.length === 0 && <div>No events yet.</div>}
-              {events.map((ev, idx) => (
-                <div className="events-item" key={`${ev.type}-${idx}`}>
+              {events.map((ev) => (
+                <div className="events-item" key={eventKey(ev)}>
                   <strong>{ev.type}</strong>
+                  <div style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                    id={typeof ev.event_id === "number" ? ev.event_id : "none"} | source={ev.source ?? "ws"}
+                  </div>
                   <div>{JSON.stringify(ev.payload ?? {})}</div>
                 </div>
               ))}
