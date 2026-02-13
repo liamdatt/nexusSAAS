@@ -16,6 +16,21 @@ Use pinned image tags only (no `latest`):
 - `IMAGE_TAG=sha-REPLACE_WITH_COMMIT`
 - `NEXUS_IMAGE=ghcr.io/<org>/nexus-runtime:sha-REPLACE_WITH_COMMIT`
 
+## Required Environment Semantics
+
+- `CONTROL_PRIVATE_IP` is host IP only (for example `10.0.0.2`).
+- `REDIS_URL` is the full credentialed URL (for example `redis://default:<password>@10.0.0.2:6379/0`).
+- Runner must always consume `REDIS_URL` directly. Do not derive it from `CONTROL_PRIVATE_IP`.
+
+Known bad examples:
+
+- `CONTROL_PRIVATE_IP=default:<password>@10.0.0.2`
+- `REDIS_URL=default:<password>@10.0.0.2`
+
+Known good example:
+
+- `REDIS_URL=redis://default:<password>@10.0.0.2:6379/0`
+
 ## Staging Deploy
 
 ```bash
@@ -32,7 +47,10 @@ Connectivity checks:
 curl -fsS http://<VPS2_PRIVATE_IP>:8000/healthz
 
 # On VPS2 (runner node)
-redis-cli -h <VPS1_PRIVATE_IP> ping
+redis-cli -u "$REDIS_URL" ping
+
+# Effective runner env should include a credentialed REDIS_URL.
+docker compose --env-file .env config | rg -n "REDIS_URL|CONTROL_PRIVATE_IP"
 ```
 
 ## Production Deploy

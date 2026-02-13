@@ -6,6 +6,7 @@ services:
     env_file:
       - .env
     environment:
+      REDIS_URL: ${REDIS_URL}
       TENANT_NETWORK: runner_internal
       TEMPLATE_COMPOSE_PATH: /app/runtime/templates/tenant-compose.yml.tmpl
       TEMPLATE_ENV_PATH: /app/runtime/templates/runtime.env.tmpl
