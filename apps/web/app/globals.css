@@ -1,165 +1,253 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #f4f7ee;
-  --surface: #ffffff;
-  --ink: #0f1b12;
-  --muted: #4d6353;
-  --line: #dbe7d7;
-  --primary: #005f4b;
-  --accent: #d9ff4f;
-  --danger: #8f2a2a;
-  --font-sans: "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
-  --font-display: "Gill Sans", "Trebuchet MS", sans-serif;
+  /* Core Palette */
+  --bg-obsidian: #050505;
+  --bg-charcoal: #0a0a0a;
+  --bg-card: rgba(20, 20, 20, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.08);
+
+  /* Accents */
+  --accent-gold: #FFD700;
+  --accent-orange: #FF4500;
+  --accent-amber: #FFBF00;
+
+  /* Text */
+  --text-primary: #F0F0F0;
+  --text-secondary: #A0A0A0;
+  --text-muted: #505050;
+
+  /* Status */
+  --status-success: #00FF94;
+  --status-error: #FF3333;
+  --status-warning: #FFD700;
+
+  /* Font Families */
+  --font-orbitron: "Orbitron", sans-serif;
+  --font-roboto: "Roboto Mono", monospace;
+  --font-sans: "Inter", sans-serif;
 }
 
-* {
-  box-sizing: border-box;
-}
+@theme {
+  --font-display: var(--font-orbitron);
+  --font-mono: var(--font-roboto);
+  --font-sans: var(--font-sans);
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  color: var(--ink);
-  background:
-    radial-gradient(circle at 85% 20%, #d9ff4f66, transparent 45%),
-    radial-gradient(circle at 20% 85%, #90d7c144, transparent 40%),
-    var(--bg);
-  font-family: var(--font-sans), sans-serif;
-}
+  --color-obsidian: var(--bg-obsidian);
+  --color-charcoal: var(--bg-charcoal);
+  --color-card-bg: var(--bg-card);
+  --color-glass-border: var(--glass-border);
 
-h1,
-h2,
-h3 {
-  font-family: var(--font-display), sans-serif;
-}
+  --color-gold: var(--accent-gold);
+  --color-orange: var(--accent-orange);
+  --color-amber: var(--accent-amber);
 
-input,
-textarea,
-button {
-  font: inherit;
-}
+  --animate-pulse-glow: pulse-glow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-spin-slow: spin 20s linear infinite;
+  --animate-spin-reverse: spin 25s linear infinite reverse;
 
-button {
-  cursor: pointer;
-}
+  @keyframes pulse-glow {
 
-.container {
-  width: min(1120px, 100% - 2rem);
-  margin: 0 auto;
-  padding: 2rem 0 3rem;
-}
+    0%,
+    100% {
+      opacity: 0.8;
+      box-shadow: 0 0 15px var(--accent-gold);
+    }
 
-.card {
-  border: 1px solid var(--line);
-  background: var(--surface);
-  border-radius: 1rem;
-  padding: 1rem;
-}
-
-.grid {
-  display: grid;
-  gap: 1rem;
-}
-
-@media (min-width: 960px) {
-  .grid.cols-2 {
-    grid-template-columns: 1fr 1fr;
+    50% {
+      opacity: 0.4;
+      box-shadow: 0 0 5px var(--accent-orange);
+    }
   }
 }
 
-label {
-  display: block;
-  font-size: 0.85rem;
-  color: var(--muted);
-  margin-bottom: 0.35rem;
+body {
+  background-color: var(--bg-obsidian);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
-input,
-textarea,
-select {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 0.65rem;
-  padding: 0.65rem 0.75rem;
-  background: #fff;
+/* ========================================
+   SCROLLBAR
+   ======================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-textarea {
-  min-height: 140px;
-  resize: vertical;
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-button.primary {
-  background: var(--primary);
-  color: white;
-  border: 1px solid var(--primary);
-  border-radius: 0.65rem;
-  padding: 0.6rem 0.85rem;
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 3px;
 }
 
-button.secondary {
-  background: #fff;
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 0.65rem;
-  padding: 0.6rem 0.85rem;
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-gold);
 }
 
-button.warn {
-  background: #fff;
-  color: var(--danger);
-  border: 1px solid #f4b0b0;
-  border-radius: 0.65rem;
-  padding: 0.6rem 0.85rem;
+/* ========================================
+   GLASSMORPHISM — "thick, beveled smoked glass"
+   ======================================== */
+.glass-panel {
+  background: linear-gradient(135deg,
+      rgba(20, 20, 20, 0.7) 0%,
+      rgba(10, 10, 10, 0.5) 100%);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 4px 30px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
 }
 
-.row {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  align-items: center;
+.glass-panel-deep {
+  background: linear-gradient(135deg,
+      rgba(15, 15, 15, 0.85) 0%,
+      rgba(5, 5, 5, 0.7) 100%);
+  backdrop-filter: blur(30px) saturate(1.8);
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.5);
 }
 
-.badge {
-  display: inline-block;
-  border-radius: 999px;
-  padding: 0.2rem 0.55rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  background: #e9f6ef;
-  color: #0d6444;
+/* ========================================
+   RIM LIGHTING — dramatic chiaroscuro edges
+   ======================================== */
+.rim-light {
+  box-shadow:
+    0 0 1px rgba(255, 215, 0, 0.15),
+    0 0 15px rgba(255, 215, 0, 0.05),
+    inset 0 1px 0 rgba(255, 215, 0, 0.08);
+  transition: box-shadow 0.4s ease;
 }
 
-.badge.warn {
-  background: #fff3d4;
-  color: #7f5b00;
+.rim-light:hover {
+  box-shadow:
+    0 0 2px rgba(255, 215, 0, 0.25),
+    0 0 25px rgba(255, 215, 0, 0.1),
+    inset 0 1px 0 rgba(255, 215, 0, 0.12);
 }
 
-.badge.err {
-  background: #ffe8e8;
-  color: #842727;
+/* ========================================
+   TEXTURES — Carbon Fiber + Hex Mesh
+   ======================================== */
+.hex-mesh {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='49' viewBox='0 0 28 49'%3E%3Cg fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.02'%3E%3Cpath d='M13.99 9.25l13 7.5v15l-13 7.5L1 31.75v-15l12.99-7.5zM3 17.9v12.7l10.99 6.34 11-6.35V17.9l-11-6.34L3 17.9zM0 15l12.98-7.5V0h-2v6.35L0 12.69v2.3zm0 18.5L12.98 41v8h-2v-6.85L0 35.81v-2.3zM15 0v7.5L27.99 15H28v-2.31h-.01L17 6.35V0h-2zm0 49v-8l12.99-7.5H28v2.31h-.01L17 42.15V49h-2z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
 }
 
-.mono {
-  font-family: ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace;
+.carbon-fiber {
+  background-image:
+    repeating-linear-gradient(0deg,
+      rgba(255, 255, 255, 0.015) 0px,
+      rgba(255, 255, 255, 0.015) 1px,
+      transparent 1px,
+      transparent 3px),
+    repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, 0.015) 0px,
+      rgba(255, 255, 255, 0.015) 1px,
+      transparent 1px,
+      transparent 3px);
+  background-size: 3px 3px;
 }
 
-.events {
-  max-height: 280px;
-  overflow: auto;
-  font-size: 0.86rem;
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
-  padding: 0.65rem;
-  background: #fbfdf8;
+/* ========================================
+   GRADIENT TEXT
+   ======================================== */
+.text-gradient-gold {
+  background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-.events-item {
-  border-bottom: 1px dashed var(--line);
-  padding: 0.45rem 0;
+/* ========================================
+   TEXT SHADOW GLOW
+   ======================================== */
+.text-shadow-glow {
+  text-shadow:
+    0 0 20px rgba(255, 215, 0, 0.3),
+    0 0 40px rgba(255, 215, 0, 0.1);
 }
 
-.events-item:last-child {
-  border-bottom: 0;
+/* ========================================
+   BORDER GLOW
+   ======================================== */
+.border-glow {
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.1);
+  transition: box-shadow 0.3s ease;
+}
+
+.border-glow:hover {
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.3);
+}
+
+/* ========================================
+   SACRED GEOMETRY RINGS (for Orb surround)
+   ======================================== */
+@keyframes ring-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-rotate-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes float-gentle {
+
+  0%,
+  100% {
+    transform: translateY(0px) rotate(-6deg);
+  }
+
+  50% {
+    transform: translateY(-12px) rotate(-4deg);
+  }
+}
+
+@keyframes float-gentle-alt {
+
+  0%,
+  100% {
+    transform: translateY(0px) rotate(4deg);
+  }
+
+  50% {
+    transform: translateY(-10px) rotate(6deg);
+  }
+}
+
+/* ========================================
+   VIGNETTE OVERLAYS
+   ======================================== */
+.vignette-heavy {
+  background: radial-gradient(ellipse at center,
+      transparent 30%,
+      rgba(0, 0, 0, 0.7) 100%);
+}
+
+.vignette-subtle {
+  background: radial-gradient(ellipse at center,
+      transparent 50%,
+      rgba(0, 0, 0, 0.4) 100%);
 }
