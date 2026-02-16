@@ -55,7 +55,11 @@ function toConfigRows(env: Record<string, string>): ConfigRow[] {
         .map(([key, value]) => makeConfigRow(key, value));
 }
 
-function safeJsonParse<T>(value: string, fallback: T, Reviver?: (key: string, value: any) => any): T {
+function safeJsonParse<T>(
+    value: string,
+    fallback: T,
+    Reviver?: (key: string, value: unknown) => unknown,
+): T {
     try {
         return JSON.parse(value, Reviver) as T;
     } catch {
@@ -127,8 +131,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const pairStartMinEventIdRef = useRef<number>(-1);
     const latestQrEventIdRef = useRef<number>(-1);
     const qrPollAfterEventIdRef = useRef<number | null>(null);
-    const pairStartQrTokenRef = useRef<string>("");
-    const pairCompatAcceptedRef = useRef<boolean>(false);
     const latestQrTokenRef = useRef<string>("");
     const qrStateRef = useRef<"idle" | "waiting" | "ready" | "timeout">("idle");
     const qrRenderGenerationRef = useRef(0);
@@ -172,33 +174,24 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 continue;
             }
 
-            const eventId = ev.event_id;
+            const eventId = typeof ev.event_id === "number" ? ev.event_id : null;
             const pairBaseline = pairStartMinEventIdRef.current;
-            const inPairFlow = pairBaseline >= 0;
-            if (inPairFlow && typeof eventId === "number") {
-                if (eventId <= pairBaseline || eventId <= latestQrEventIdRef.current) {
+            if (eventId !== null) {
+                if (pairBaseline >= 0 && eventId <= pairBaseline) {
                     continue;
                 }
-            } else if (inPairFlow && typeof eventId !== "number") {
-                if (qrStateRef.current !== "waiting") continue;
-                if (pairCompatAcceptedRef.current) continue;
-                if (qr === pairStartQrTokenRef.current) continue;
-                if (qr === latestQrTokenRef.current) continue;
-                pairCompatAcceptedRef.current = true;
-            } else if (!inPairFlow && qr === latestQrTokenRef.current) {
+                if (eventId <= latestQrEventIdRef.current) {
+                    continue;
+                }
+                latestQrEventIdRef.current = eventId;
+                qrPollAfterEventIdRef.current = Math.max(qrPollAfterEventIdRef.current ?? -1, eventId);
+            } else if (qr === latestQrTokenRef.current) {
                 continue;
             }
 
-            if (typeof eventId === "number") {
-                latestQrEventIdRef.current = eventId;
-            }
             setTrackedQr(qr);
             setTrackedQrState("ready");
             stopQrPolling();
-
-            if (typeof eventId === "number") {
-                qrPollAfterEventIdRef.current = Math.max(qrPollAfterEventIdRef.current ?? 0, eventId);
-            }
         }
         setEvents((prev) => mergeEvents(prev, incoming));
     }
@@ -317,8 +310,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             pairStartMinEventIdRef.current = baseline;
             latestQrEventIdRef.current = baseline;
             qrPollAfterEventIdRef.current = baseline;
-            pairStartQrTokenRef.current = latestQrTokenRef.current;
-            pairCompatAcceptedRef.current = false;
             stopQrPolling();
             setTrackedQrState("waiting");
         }
@@ -327,8 +318,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             pairStartMinEventIdRef.current = -1;
             latestQrEventIdRef.current = -1;
             qrPollAfterEventIdRef.current = null;
-            pairStartQrTokenRef.current = "";
-            pairCompatAcceptedRef.current = false;
             setTrackedQrState("idle");
             setWhatsappConnected(false);
         }
@@ -361,14 +350,12 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         qrPollGeneration.current = generation;
         setTrackedQrState("waiting");
         const deadline = Date.now() + 90_000;
-        let idleCycles = 0;
 
         while (qrPollGeneration.current === generation && Date.now() < deadline) {
             try {
                 const previousQrEventId = latestQrEventIdRef.current;
-                const previousQrToken = latestQrTokenRef.current;
                 const rows = await loadRecentEvents(id, token, "poll_incremental", {
-                    limit: 50,
+                    limit: 20,
                     afterEventId: qrPollAfterEventIdRef.current,
                     types: ["whatsapp.qr"],
                 });
@@ -383,33 +370,8 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                     qrPollAfterEventIdRef.current = maxSeenEventId;
                 }
 
-                if (latestQrEventIdRef.current > previousQrEventId || latestQrTokenRef.current !== previousQrToken) {
+                if (latestQrEventIdRef.current > previousQrEventId || qrStateRef.current === "ready") {
                     return;
-                }
-
-                idleCycles += 1;
-                if (idleCycles >= 3) {
-                    idleCycles = 0;
-                    const fallbackRows = await loadRecentEvents(id, token, "poll_latest", {
-                        limit: 1,
-                        types: ["whatsapp.qr"],
-                    });
-                    if (qrPollGeneration.current !== generation) {
-                        return;
-                    }
-                    const newestFallbackEventId = fallbackRows.reduce<number>(
-                        (maxId, ev) => (typeof ev.event_id === "number" ? Math.max(maxId, ev.event_id) : maxId),
-                        qrPollAfterEventIdRef.current ?? -1,
-                    );
-                    if (newestFallbackEventId >= 0) {
-                        qrPollAfterEventIdRef.current = Math.max(
-                            qrPollAfterEventIdRef.current ?? -1,
-                            newestFallbackEventId,
-                        );
-                    }
-                    if (latestQrEventIdRef.current > previousQrEventId || latestQrTokenRef.current !== previousQrToken) {
-                        return;
-                    }
                 }
             } catch {
                 // ignore
@@ -555,8 +517,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         pairStartMinEventIdRef.current = -1;
         latestQrEventIdRef.current = -1;
         qrPollAfterEventIdRef.current = null;
-        pairStartQrTokenRef.current = "";
-        pairCompatAcceptedRef.current = false;
         setEvents([]);
         setTrackedQr("");
         setTrackedQrState("idle");
@@ -715,7 +675,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                                     : 'border border-[--accent-gold] text-[--accent-gold] bg-[rgba(255,215,0,0.04)] hover:bg-[rgba(255,215,0,0.1)]'
                                                 }`}
                                         >
-                                            {whatsappIsConnected ? "SEVER CONNECTION" : "ESTABLISH PAIRING"}
+                                            {whatsappIsConnected ? "Disconnect WhatsApp" : "Generate QR"}
                                         </button>
                                     </div>
 
