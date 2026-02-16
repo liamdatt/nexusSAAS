@@ -446,7 +446,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                     qrPollAfterEventIdRef.current = maxSeenEventId;
                 }
 
-                if (latestQrEventIdRef.current > previousQrEventId || qrStateRef.current === "ready") {
+                if (latestQrEventIdRef.current > previousQrEventId) {
                     return;
                 }
             } catch {
