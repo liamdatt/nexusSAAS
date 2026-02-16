@@ -65,7 +65,11 @@ async def _reconcile_loop() -> None:
             if running:
                 running_tenant_ids.add(tenant_id)
                 await monitor.start(tenant_id)
-                await publisher.publish(tenant_id, "runtime.status", {"state": "running", "status": status_text})
+                await publisher.publish(
+                    tenant_id,
+                    "runtime.status",
+                    {"state": "running", "status": status_text, "source": "reconcile"},
+                )
             else:
                 await publisher.publish(tenant_id, "runtime.status", {"state": "paused", "status": status_text})
 

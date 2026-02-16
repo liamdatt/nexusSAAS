@@ -33,6 +33,7 @@ type EventItem = {
 };
 
 type EventSource = "ws" | "poll_incremental" | "poll_latest";
+type WhatsAppLinkState = "unknown" | "connected" | "disconnected";
 
 type ConfigRow = {
     id: string;
@@ -118,7 +119,8 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [qrRenderError, setQrRenderError] = useState("");
     const [showRawQrDebug, setShowRawQrDebug] = useState(false);
     const [qrState, setQrState] = useState<"idle" | "waiting" | "ready" | "timeout">("idle");
-    const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(null);
+    const [whatsappLinkState, setWhatsappLinkState] = useState<WhatsAppLinkState>("unknown");
+    const [isGeneratingQr, setIsGeneratingQr] = useState(false);
     const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
     const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
     const [error, setError] = useState("");
@@ -129,8 +131,10 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const latestEventIdRef = useRef<number | null>(null);
     const qrPollGeneration = useRef(0);
     const pairStartMinEventIdRef = useRef<number>(-1);
+    const pairStartBoundaryEventIdRef = useRef<number | null>(null);
     const latestQrEventIdRef = useRef<number>(-1);
     const qrPollAfterEventIdRef = useRef<number | null>(null);
+    const whatsappLinkEventIdRef = useRef<number>(-1);
     const latestQrTokenRef = useRef<string>("");
     const qrStateRef = useRef<"idle" | "waiting" | "ready" | "timeout">("idle");
     const qrRenderGenerationRef = useRef(0);
@@ -150,22 +154,54 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         setQrState(value);
     }
 
+    function setTrackedWhatsappLinkState(value: WhatsAppLinkState) {
+        setWhatsappLinkState(value);
+    }
+
+    function applyWhatsappLinkTransition(nextState: Exclude<WhatsAppLinkState, "unknown">, eventId: number | null) {
+        if (eventId !== null) {
+            if (eventId < whatsappLinkEventIdRef.current) {
+                return;
+            }
+            whatsappLinkEventIdRef.current = eventId;
+        } else if (whatsappLinkEventIdRef.current >= 0) {
+            return;
+        }
+        setTrackedWhatsappLinkState(nextState);
+    }
+
     function applyIncomingEvents(incoming: EventItem[]) {
         if (incoming.length === 0) return;
-        for (const ev of incoming) {
+        const orderedForState = [...incoming].sort((a, b) => {
+            const aId = typeof a.event_id === "number" ? a.event_id : Number.MAX_SAFE_INTEGER;
+            const bId = typeof b.event_id === "number" ? b.event_id : Number.MAX_SAFE_INTEGER;
+            return aId - bId;
+        });
+
+        for (const ev of orderedForState) {
+            const eventId = typeof ev.event_id === "number" ? ev.event_id : null;
             if (typeof ev.event_id === "number") {
                 latestEventIdRef.current = Math.max(latestEventIdRef.current ?? 0, ev.event_id);
             }
+
+            const projected =
+                ev.type === "runtime.status" && typeof ev.payload?.state === "string" ? ev.payload.state : "";
             if (ev.type === "whatsapp.connected") {
-                setWhatsappConnected(true);
+                applyWhatsappLinkTransition("connected", eventId);
             } else if (ev.type === "whatsapp.disconnected") {
-                setWhatsappConnected(false);
-            } else if (ev.type === "runtime.status") {
-                const projected = typeof ev.payload?.state === "string" ? ev.payload.state : "";
-                if (projected === "running") {
-                    setWhatsappConnected(true);
-                } else if (projected === "pending_pairing" || projected === "paused") {
-                    setWhatsappConnected(false);
+                applyWhatsappLinkTransition("disconnected", eventId);
+            } else if (ev.type === "whatsapp.qr") {
+                applyWhatsappLinkTransition("disconnected", eventId);
+            } else if (ev.type === "runtime.status" && (projected === "pending_pairing" || projected === "paused")) {
+                applyWhatsappLinkTransition("disconnected", eventId);
+            }
+
+            const pairBaseline = pairStartMinEventIdRef.current;
+            if (pairBaseline >= 0 && eventId !== null && eventId > pairBaseline) {
+                if (ev.type === "whatsapp.disconnected") {
+                    pairStartBoundaryEventIdRef.current = Math.max(pairStartBoundaryEventIdRef.current ?? -1, eventId);
+                } else if (ev.type === "runtime.status" && projected === "pending_pairing") {
+                    pairStartBoundaryEventIdRef.current = Math.max(pairStartBoundaryEventIdRef.current ?? -1, eventId);
                 }
             }
 
@@ -174,12 +210,20 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 continue;
             }
 
-            const eventId = typeof ev.event_id === "number" ? ev.event_id : null;
-            const pairBaseline = pairStartMinEventIdRef.current;
-            if (eventId !== null) {
-                if (pairBaseline >= 0 && eventId <= pairBaseline) {
+            if (pairBaseline >= 0) {
+                if (eventId === null) {
                     continue;
                 }
+                if (eventId <= pairBaseline) {
+                    continue;
+                }
+                const pairBoundary = pairStartBoundaryEventIdRef.current;
+                if (pairBoundary === null || eventId <= pairBoundary) {
+                    continue;
+                }
+            }
+
+            if (eventId !== null) {
                 if (eventId <= latestQrEventIdRef.current) {
                     continue;
                 }
@@ -191,6 +235,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
 
             setTrackedQr(qr);
             setTrackedQrState("ready");
+            setIsGeneratingQr(false);
+            pairStartMinEventIdRef.current = -1;
+            pairStartBoundaryEventIdRef.current = null;
             stopQrPolling();
         }
         setEvents((prev) => mergeEvents(prev, incoming));
@@ -244,11 +291,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             const data = await api<StatusResponse>(`/v1/tenants/${id}/status`, {}, token);
             setTenantId(data.tenant_id);
             setStatus(data);
-            if (data.actual_state === "running") {
-                setWhatsappConnected(true);
-            } else if (data.actual_state === "pending_pairing" || data.actual_state === "paused") {
-                setWhatsappConnected(false);
-            }
         } catch (err) {
             setError((err as Error).message);
         }
@@ -308,18 +350,37 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         if (op === "pair/start") {
             const baseline = latestEventIdRef.current ?? 0;
             pairStartMinEventIdRef.current = baseline;
+            pairStartBoundaryEventIdRef.current = null;
             latestQrEventIdRef.current = baseline;
             qrPollAfterEventIdRef.current = baseline;
             stopQrPolling();
+            setTrackedQr("");
             setTrackedQrState("waiting");
+            setIsGeneratingQr(true);
+            setTrackedWhatsappLinkState("disconnected");
         }
-        if (op === "stop" || op === "whatsapp/disconnect") {
+        if (op === "stop") {
             stopQrPolling();
             pairStartMinEventIdRef.current = -1;
+            pairStartBoundaryEventIdRef.current = null;
             latestQrEventIdRef.current = -1;
             qrPollAfterEventIdRef.current = null;
+            setTrackedQr("");
             setTrackedQrState("idle");
-            setWhatsappConnected(false);
+            setTrackedWhatsappLinkState("disconnected");
+            setIsGeneratingQr(false);
+        }
+        if (op === "whatsapp/disconnect") {
+            const baseline = latestEventIdRef.current ?? 0;
+            stopQrPolling();
+            pairStartMinEventIdRef.current = -1;
+            pairStartBoundaryEventIdRef.current = null;
+            latestQrEventIdRef.current = baseline;
+            qrPollAfterEventIdRef.current = baseline;
+            setTrackedQr("");
+            setTrackedQrState("waiting");
+            setTrackedWhatsappLinkState("disconnected");
+            setIsGeneratingQr(false);
         }
         try {
             let mapped = `/v1/tenants/${tenantId}/runtime/${op}`;
@@ -332,13 +393,25 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             await api(mapped, { method: "POST" }, tokens.access_token);
             await fetchStatus(tenantId, tokens.access_token);
             if (op === "pair/start") {
-                setWhatsappConnected(false);
-                void pollForQr(tenantId, tokens.access_token);
+                if (qrStateRef.current !== "ready") {
+                    void pollForQr(tenantId, tokens.access_token);
+                }
+            }
+            if (op === "whatsapp/disconnect") {
+                if (qrStateRef.current !== "ready") {
+                    void pollForQr(tenantId, tokens.access_token);
+                }
             }
         } catch (err) {
             setError((err as Error).message);
             if (op === "pair/start") {
                 setTrackedQrState("timeout");
+                setIsGeneratingQr(false);
+                pairStartMinEventIdRef.current = -1;
+                pairStartBoundaryEventIdRef.current = null;
+            }
+            if (op === "whatsapp/disconnect") {
+                setTrackedQrState("idle");
             }
         } finally {
             setBusy(false);
@@ -346,6 +419,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     }
 
     async function pollForQr(id: string, token: string) {
+        if (qrStateRef.current === "ready") {
+            return;
+        }
         const generation = qrPollGeneration.current + 1;
         qrPollGeneration.current = generation;
         setTrackedQrState("waiting");
@@ -357,7 +433,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 const rows = await loadRecentEvents(id, token, "poll_incremental", {
                     limit: 20,
                     afterEventId: qrPollAfterEventIdRef.current,
-                    types: ["whatsapp.qr"],
+                    types: ["runtime.status", "whatsapp.disconnected", "whatsapp.qr"],
                 });
                 if (qrPollGeneration.current !== generation) {
                     return;
@@ -381,6 +457,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
 
         if (qrPollGeneration.current === generation) {
             setTrackedQrState("timeout");
+            setIsGeneratingQr(false);
+            pairStartMinEventIdRef.current = -1;
+            pairStartBoundaryEventIdRef.current = null;
         }
     }
 
@@ -515,12 +594,15 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         stopQrPolling();
         latestEventIdRef.current = null;
         pairStartMinEventIdRef.current = -1;
+        pairStartBoundaryEventIdRef.current = null;
         latestQrEventIdRef.current = -1;
         qrPollAfterEventIdRef.current = null;
+        whatsappLinkEventIdRef.current = -1;
         setEvents([]);
         setTrackedQr("");
         setTrackedQrState("idle");
-        setWhatsappConnected(null);
+        setTrackedWhatsappLinkState("unknown");
+        setIsGeneratingQr(false);
         if (tenantId) {
             void loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
         }
@@ -535,9 +617,18 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     }, [status]);
 
     const whatsappIsConnected = useMemo(() => {
-        if (whatsappConnected !== null) return whatsappConnected;
-        return status?.actual_state === "running";
-    }, [status, whatsappConnected]);
+        return whatsappLinkState === "connected";
+    }, [whatsappLinkState]);
+
+    const whatsappStatusText = useMemo(() => {
+        if (whatsappLinkState === "connected") {
+            return "DATA STREAM ACTIVE";
+        }
+        if (whatsappLinkState === "unknown") {
+            return "LINK STATUS CHECKING...";
+        }
+        return "SIGNAL LOSS · UNPAIRED";
+    }, [whatsappLinkState]);
 
 
     // --- Render ---
@@ -661,10 +752,12 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                         <div className="flex items-center gap-3">
                                             <div className={`w-2 h-2 rounded-full transition-all ${whatsappIsConnected
                                                     ? 'bg-[--status-success] shadow-[0_0_8px_var(--status-success)]'
-                                                    : 'bg-[--accent-orange] animate-pulse'
+                                                    : whatsappLinkState === "unknown"
+                                                        ? 'bg-[--text-muted]'
+                                                        : 'bg-[--accent-orange] animate-pulse'
                                                 }`} />
                                             <span className="text-[--text-secondary] font-mono text-xs tracking-wider">
-                                                {whatsappIsConnected ? "DATA STREAM ACTIVE" : "SIGNAL LOSS · UNPAIRED"}
+                                                {whatsappStatusText}
                                             </span>
                                         </div>
                                         <button
@@ -698,7 +791,18 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                                     <img src={qrImageDataUrl} alt="QR Code" className="w-36 h-36 md:w-44 md:h-44 rounded-lg" />
                                                 ) : (
                                                     <div className="w-36 h-36 md:w-44 md:h-44 flex items-center justify-center bg-[rgba(255,215,0,0.03)] rounded-lg text-[--text-muted] font-mono text-[10px] text-center p-3">
-                                                        {qrState === "waiting" ? "ACQUIRING\nSIGNAL..." : "RENDERING..."}
+                                                        {qrState === "waiting" ? (
+                                                            isGeneratingQr ? (
+                                                                <div className="flex flex-col items-center gap-2">
+                                                                    <span className="w-5 h-5 rounded-full border-2 border-[--accent-gold] border-t-transparent animate-spin" />
+                                                                    <span className="whitespace-pre-line">GENERATING QR{"\n"}RESTARTING RUNTIME...</span>
+                                                                </div>
+                                                            ) : (
+                                                                "ACQUIRING\nSIGNAL..."
+                                                            )
+                                                        ) : (
+                                                            "RENDERING..."
+                                                        )}
                                                     </div>
                                                 )}
                                                 {/* Animated border pulse */}

@@ -90,7 +90,7 @@ def test_reconcile_stops_stale_monitors(tmp_path: Path, monkeypatch) -> None:
 
     assert monitor.started == ["running1"]
     assert monitor.stopped == ["stale1"]
-    assert ("running1", "runtime.status", {"state": "running", "status": "Up 1m"}) in publisher.items
+    assert ("running1", "runtime.status", {"state": "running", "status": "Up 1m", "source": "reconcile"}) in publisher.items
     assert ("paused1", "runtime.status", {"state": "paused", "status": "Exited"}) in publisher.items
 
 

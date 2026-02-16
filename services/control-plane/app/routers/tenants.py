@@ -347,7 +347,14 @@ async def whatsapp_disconnect(
 ) -> OperationAccepted:
     _tenant_for_owner(db, tenant_id, user.id)
     await _runner_call(request, tenant_id, "whatsapp_disconnect", lambda: runner.disconnect(tenant_id))
+    runtime = _runtime_for_tenant(db, tenant_id)
+    runtime.desired_state = "pending_pairing"
+    runtime.actual_state = "pending_pairing"
+    runtime.last_error = None
+    runtime.last_heartbeat = datetime.now(UTC)
+    db.commit()
     await _emit(request, tenant_id, "whatsapp.disconnected", {"reason": "requested"})
+    await _emit(request, tenant_id, "runtime.status", {"state": "pending_pairing"})
     return OperationAccepted(tenant_id=tenant_id, operation="whatsapp_disconnect")
 
 

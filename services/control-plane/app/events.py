@@ -217,10 +217,13 @@ class EventManager:
         if event_type == "runtime.status":
             state = payload.get("state")
             if isinstance(state, str) and state:
-                mapped_state = state
-                if state == "error":
-                    raw = payload.get("message") or payload.get("error") or "runtime_error"
-                    mapped_error = str(raw)
+                source = payload.get("source")
+                is_reconcile_running = state == "running" and source == "reconcile"
+                if not is_reconcile_running:
+                    mapped_state = state
+                    if state == "error":
+                        raw = payload.get("message") or payload.get("error") or "runtime_error"
+                        mapped_error = str(raw)
         elif event_type == "runtime.error":
             mapped_state = "error"
             raw = payload.get("message") or payload.get("error") or "runtime_error"

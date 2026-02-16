@@ -67,6 +67,7 @@ tenants.runner = DummyRunner()
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
+    tenants.runner = DummyRunner()
     tenants.runner.fail_apply_config = False
     tenants.runner.provision_payloads.clear()
     tenants.runner.start_payloads.clear()
@@ -163,6 +164,25 @@ def test_cross_tenant_isolation(client: TestClient) -> None:
 
     denied = client.get(f"/v1/tenants/{tenant_a}/status", headers={"Authorization": f"Bearer {token_b}"})
     assert denied.status_code == 404
+
+
+def test_disconnect_immediately_projects_pending_pairing_status(client: TestClient) -> None:
+    user = _signup(client, "contracts-disconnect-status@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    start = client.post(f"/v1/tenants/{tenant_id}/runtime/start", headers={"Authorization": f"Bearer {token}"})
+    assert start.status_code == 200
+
+    disconnect = client.post(
+        f"/v1/tenants/{tenant_id}/whatsapp/disconnect",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert disconnect.status_code == 200
+
+    status_resp = client.get(f"/v1/tenants/{tenant_id}/status", headers={"Authorization": f"Bearer {token}"})
+    assert status_resp.status_code == 200
+    assert status_resp.json()["actual_state"] == "pending_pairing"
 
 
 def test_config_revision_activation_only_on_successful_apply(client: TestClient) -> None:

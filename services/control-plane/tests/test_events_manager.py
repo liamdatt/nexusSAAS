@@ -19,7 +19,7 @@ if DB_PATH.exists():
 
 from app.db import SessionLocal, init_db
 from app.events import EventManager
-from app.models import RuntimeEvent, Tenant, User
+from app.models import RuntimeEvent, Tenant, TenantRuntime, User
 
 
 class _RedisDown:
@@ -78,9 +78,10 @@ def test_event_manager_recovers_when_redis_is_unavailable_on_startup() -> None:
     init_db()
     db = SessionLocal()
     try:
-        db.add(User(email="events-manager@example.com", password_hash="x"))
+        user = User(email="events-manager@example.com", password_hash="x")
+        db.add(user)
         db.flush()
-        db.add(Tenant(id="abc123", owner_user_id=1, status="pending_pairing", worker_id="worker-abc123"))
+        db.add(Tenant(id="abc123", owner_user_id=user.id, status="pending_pairing", worker_id="worker-abc123"))
         db.commit()
     finally:
         db.close()
@@ -140,3 +141,59 @@ def test_event_manager_recovers_when_redis_is_unavailable_on_startup() -> None:
 
     assert down.closed is True
     assert up.closed is True
+
+
+def test_runtime_projection_ignores_reconcile_running_state() -> None:
+    init_db()
+    db = SessionLocal()
+    try:
+        user = User(email="events-projection@example.com", password_hash="x")
+        db.add(user)
+        db.flush()
+        db.add(Tenant(id="proj123", owner_user_id=user.id, status="pending_pairing", worker_id="worker-proj123"))
+        db.add(TenantRuntime(tenant_id="proj123", desired_state="running", actual_state="pending_pairing"))
+        db.commit()
+    finally:
+        db.close()
+
+    manager = EventManager(SessionLocal)
+
+    db = SessionLocal()
+    try:
+        manager._project_runtime_state(
+            db,
+            tenant_id="proj123",
+            event_type="runtime.status",
+            payload={"state": "running", "source": "reconcile"},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        runtime = db.scalar(select(TenantRuntime).where(TenantRuntime.tenant_id == "proj123"))
+        assert runtime is not None
+        assert runtime.actual_state == "pending_pairing"
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        manager._project_runtime_state(
+            db,
+            tenant_id="proj123",
+            event_type="runtime.status",
+            payload={"state": "running"},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        runtime = db.scalar(select(TenantRuntime).where(TenantRuntime.tenant_id == "proj123"))
+        assert runtime is not None
+        assert runtime.actual_state == "running"
+    finally:
+        db.close()
