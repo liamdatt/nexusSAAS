@@ -114,6 +114,7 @@ export default function Home() {
   const [qrRenderError, setQrRenderError] = useState("");
   const [showRawQrDebug, setShowRawQrDebug] = useState(false);
   const [qrState, setQrState] = useState<"idle" | "waiting" | "ready" | "timeout">("idle");
+  const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(null);
   const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
   const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
   const [error, setError] = useState("");
@@ -154,6 +155,19 @@ export default function Home() {
       if (typeof ev.event_id === "number") {
         latestEventIdRef.current = Math.max(latestEventIdRef.current ?? 0, ev.event_id);
       }
+      if (ev.type === "whatsapp.connected") {
+        setWhatsappConnected(true);
+      } else if (ev.type === "whatsapp.disconnected") {
+        setWhatsappConnected(false);
+      } else if (ev.type === "runtime.status") {
+        const projected = typeof ev.payload?.state === "string" ? ev.payload.state : "";
+        if (projected === "running") {
+          setWhatsappConnected(true);
+        } else if (projected === "pending_pairing" || projected === "paused") {
+          setWhatsappConnected(false);
+        }
+      }
+
       const qr = ev.type === "whatsapp.qr" ? extractQr(ev.payload) : "";
       if (!qr) {
         continue;
@@ -217,6 +231,7 @@ export default function Home() {
     setTrackedQrState("idle");
     setOpenrouterKeyInput("");
     setRequiresOpenRouterKey(false);
+    setWhatsappConnected(null);
     setError("");
     tenantBootstrapAttemptedToken.current = null;
     latestEventIdRef.current = null;
@@ -328,6 +343,12 @@ export default function Home() {
   }, [tenantId, tokens]);
 
   useEffect(() => {
+    if (status?.actual_state === "pending_pairing" && !latestQr && qrStateRef.current === "idle") {
+      setTrackedQrState("waiting");
+    }
+  }, [latestQr, status?.actual_state]);
+
+  useEffect(() => {
     stopQrPolling();
     latestEventIdRef.current = null;
     pairStartMinEventIdRef.current = -1;
@@ -338,6 +359,7 @@ export default function Home() {
     setEvents([]);
     setTrackedQr("");
     setTrackedQrState("idle");
+    setWhatsappConnected(null);
     if (tenantId && tokens) {
       void loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
     }
@@ -435,6 +457,11 @@ export default function Home() {
       const data = await api<StatusResponse>(`/v1/tenants/${id}/status`, {}, token);
       setTenantId(data.tenant_id);
       setStatus(data);
+      if (data.actual_state === "running") {
+        setWhatsappConnected(true);
+      } else if (data.actual_state === "pending_pairing" || data.actual_state === "paused") {
+        setWhatsappConnected(false);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
@@ -553,7 +580,7 @@ export default function Home() {
     }
   }
 
-  async function runOperation(op: "start" | "stop" | "restart" | "pair/start" | "whatsapp/disconnect") {
+  async function runOperation(op: "start" | "stop" | "pair/start" | "whatsapp/disconnect") {
     if (!tokens || !tenantId) return;
     setBusy(true);
     setError("");
@@ -575,6 +602,7 @@ export default function Home() {
       pairStartQrTokenRef.current = "";
       pairCompatAcceptedRef.current = false;
       setTrackedQrState("idle");
+      setWhatsappConnected(false);
     }
     try {
       let mapped = `/v1/tenants/${tenantId}/runtime/${op}`;
@@ -587,6 +615,7 @@ export default function Home() {
       await api(mapped, { method: "POST" }, tokens.access_token);
       await fetchStatus(tenantId, tokens.access_token);
       if (op === "pair/start") {
+        setWhatsappConnected(false);
         void pollForQr(tenantId, tokens.access_token);
       }
     } catch (err) {
@@ -717,6 +746,26 @@ export default function Home() {
     return Boolean(value && String(value).trim());
   }, [originalConfig]);
 
+  const runtimeIsActive = useMemo(() => {
+    const state = status?.actual_state;
+    return state === "running" || state === "pending_pairing" || state === "provisioning";
+  }, [status]);
+
+  const runtimeOp: "start" | "stop" = runtimeIsActive ? "stop" : "start";
+  const runtimeLabel = runtimeIsActive ? "Stop" : "Start";
+  const runtimeClass = runtimeIsActive ? "warn" : "secondary";
+
+  const whatsappIsConnected = useMemo(() => {
+    if (whatsappConnected !== null) {
+      return whatsappConnected;
+    }
+    return status?.actual_state === "running";
+  }, [status, whatsappConnected]);
+
+  const whatsappOp: "pair/start" | "whatsapp/disconnect" = whatsappIsConnected ? "whatsapp/disconnect" : "pair/start";
+  const whatsappLabel = whatsappIsConnected ? "Disconnect WhatsApp" : "Generate QR";
+  const whatsappClass = whatsappIsConnected ? "warn" : "primary";
+
   return (
     <main className="container">
       <section className="card" style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -810,15 +859,24 @@ export default function Home() {
               Runtime: <span className={statusClass}>{status?.actual_state ?? "unknown"}</span>
             </p>
             <div className="row" style={{ marginBottom: "1rem" }}>
-              <button className="secondary" disabled={busy || !tenantId || !hasOpenRouterKey} onClick={() => void runOperation("start")}>Start</button>
-              <button className="secondary" disabled={busy || !tenantId} onClick={() => void runOperation("stop")}>Stop</button>
-              <button className="secondary" disabled={busy || !tenantId || !hasOpenRouterKey} onClick={() => void runOperation("restart")}>Restart</button>
-              <button className="primary" disabled={busy || !tenantId || !hasOpenRouterKey} onClick={() => void runOperation("pair/start")}>Pair WhatsApp</button>
-              <button className="warn" disabled={busy || !tenantId} onClick={() => void runOperation("whatsapp/disconnect")}>Disconnect WhatsApp</button>
+              <button
+                className={runtimeClass}
+                disabled={busy || !tenantId || (runtimeOp === "start" && !hasOpenRouterKey)}
+                onClick={() => void runOperation(runtimeOp)}
+              >
+                {runtimeLabel}
+              </button>
+              <button
+                className={whatsappClass}
+                disabled={busy || !tenantId || (whatsappOp === "pair/start" && !hasOpenRouterKey)}
+                onClick={() => void runOperation(whatsappOp)}
+              >
+                {whatsappLabel}
+              </button>
             </div>
             {tenantId && !hasOpenRouterKey && (
               <p style={{ marginTop: "-0.35rem", color: "var(--danger)" }}>
-                Set <span className="mono">NEXUS_OPENROUTER_API_KEY</span> in Runtime Config and save before Start, Restart, or Pair WhatsApp.
+                Set <span className="mono">NEXUS_OPENROUTER_API_KEY</span> in Runtime Config and save before Start or Generate QR.
               </p>
             )}
 
@@ -826,7 +884,7 @@ export default function Home() {
             {qrState === "waiting" && <p style={{ marginTop: 0, color: "var(--muted)" }}>Waiting for newer QR...</p>}
             {qrState === "timeout" && (
               <p style={{ marginTop: 0, color: "var(--danger)" }}>
-                QR was not received in time. Click <strong>Pair WhatsApp</strong> again.
+                QR was not received in time. Click <strong>Generate QR</strong> again.
               </p>
             )}
             {!latestQr ? (
