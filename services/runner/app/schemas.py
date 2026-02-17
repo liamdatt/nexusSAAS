@@ -33,6 +33,10 @@ class ApplyConfigRequest(BaseModel):
     config_revision: int | None = None
 
 
+class GoogleConnectRequest(BaseModel):
+    token_json: dict[str, object] = Field(default_factory=dict)
+
+
 class GenericResponse(BaseModel):
     tenant_id: str
     ok: bool = True

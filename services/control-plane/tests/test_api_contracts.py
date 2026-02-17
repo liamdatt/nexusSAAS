@@ -9,6 +9,10 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_control_plane_contracts.db"
 os.environ["CONTROL_AUTO_CREATE_SCHEMA"] = "true"
 os.environ["REDIS_URL"] = "redis://127.0.0.1:6399/0"
 os.environ["NEXUS_IMAGE"] = "ghcr.io/test/nexus-runtime:test"
+os.environ["GOOGLE_OAUTH_CLIENT_ID"] = "google-client-id-test"
+os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = "google-client-secret-test"
+os.environ["GOOGLE_OAUTH_REDIRECT_URI"] = "http://testserver/v1/oauth/google/callback"
+os.environ["GOOGLE_OAUTH_ALLOWED_ORIGINS"] = "http://testserver"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +20,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import tenants
 from app.runner_client import RunnerError
+from app.security import create_google_oauth_state
 
 
 DB_PATH = Path("./test_control_plane_contracts.db")
@@ -30,6 +35,8 @@ class DummyRunner:
         self.start_payloads: list[dict | None] = []
         self.restart_payloads: list[dict | None] = []
         self.pair_start_payloads: list[dict | None] = []
+        self.google_connect_payloads: list[dict] = []
+        self.google_disconnect_calls: list[str] = []
 
     async def provision(self, tenant_id: str, payload: dict) -> dict:
         self.provision_payloads.append(payload)
@@ -58,6 +65,14 @@ class DummyRunner:
             raise RunnerError("apply failed", status_code=502, code="runner_apply_failed")
         return {"tenant_id": tenant_id, "ok": True}
 
+    async def google_connect(self, tenant_id: str, payload: dict) -> dict:
+        self.google_connect_payloads.append(payload)
+        return {"tenant_id": tenant_id, "ok": True}
+
+    async def google_disconnect(self, tenant_id: str) -> dict:
+        self.google_disconnect_calls.append(tenant_id)
+        return {"tenant_id": tenant_id, "ok": True}
+
     async def health(self, tenant_id: str) -> dict:
         return {"tenant_id": tenant_id, "container_running": True}
 
@@ -73,6 +88,8 @@ def client() -> Iterator[TestClient]:
     tenants.runner.start_payloads.clear()
     tenants.runner.restart_payloads.clear()
     tenants.runner.pair_start_payloads.clear()
+    tenants.runner.google_connect_payloads.clear()
+    tenants.runner.google_disconnect_calls.clear()
     with TestClient(app) as c:
         yield c
 
@@ -375,3 +392,108 @@ def test_recent_events_endpoint_filters_and_scopes(client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert denied.status_code == 404
+
+
+def test_google_connect_start_returns_auth_url(client: TestClient) -> None:
+    user = _signup(client, "contracts-google-start@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    resp = client.post(
+        f"/v1/tenants/{tenant_id}/google/connect/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tenant_id"] == tenant_id
+    assert body["expires_in_seconds"] > 0
+    assert "https://accounts.google.com/o/oauth2/v2/auth" in body["auth_url"]
+    assert "state=" in body["auth_url"]
+
+
+def test_google_callback_persists_token_and_syncs_runner(client: TestClient, monkeypatch) -> None:
+    user = _signup(client, "contracts-google-callback@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+    user_id = int(user["user"]["id"])
+    state_token, _ttl = create_google_oauth_state(user_id=user_id, tenant_id=tenant_id, origin="http://testserver")
+
+    async def _fake_exchange(**kwargs) -> dict:
+        assert kwargs["code"] == "auth-code"
+        return {
+            "access_token": "ya29.test-access",
+            "refresh_token": "1//test-refresh",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events",
+        }
+
+    monkeypatch.setattr(tenants, "exchange_code_for_tokens", _fake_exchange)
+
+    callback = client.get("/v1/oauth/google/callback", params={"code": "auth-code", "state": state_token})
+    assert callback.status_code == 200
+    assert "google.oauth.result" in callback.text
+
+    status_resp = client.get(f"/v1/tenants/{tenant_id}/google/status", headers={"Authorization": f"Bearer {token}"})
+    assert status_resp.status_code == 200
+    status_body = status_resp.json()
+    assert status_body["connected"] is True
+    assert "https://www.googleapis.com/auth/gmail.modify" in status_body["scopes"]
+
+    assert len(tenants.runner.google_connect_payloads) >= 1
+    token_json = tenants.runner.google_connect_payloads[-1]["token_json"]
+    assert token_json["token"] == "ya29.test-access"
+    assert token_json["refresh_token"] == "1//test-refresh"
+
+
+def test_google_disconnect_clears_status_and_calls_runner(client: TestClient, monkeypatch) -> None:
+    user = _signup(client, "contracts-google-disconnect@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+    user_id = int(user["user"]["id"])
+    state_token, _ttl = create_google_oauth_state(user_id=user_id, tenant_id=tenant_id, origin="http://testserver")
+
+    async def _fake_exchange(**kwargs) -> dict:
+        del kwargs
+        return {
+            "access_token": "ya29.test-access",
+            "refresh_token": "1//test-refresh",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events",
+        }
+
+    monkeypatch.setattr(tenants, "exchange_code_for_tokens", _fake_exchange)
+    callback = client.get("/v1/oauth/google/callback", params={"code": "auth-code", "state": state_token})
+    assert callback.status_code == 200
+
+    resp = client.post(f"/v1/tenants/{tenant_id}/google/disconnect", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json()["operation"] == "google_disconnect"
+    assert tenant_id in tenants.runner.google_disconnect_calls
+
+    status_resp = client.get(f"/v1/tenants/{tenant_id}/google/status", headers={"Authorization": f"Bearer {token}"})
+    assert status_resp.status_code == 200
+    assert status_resp.json()["connected"] is False
+
+
+def test_google_endpoints_enforce_tenant_ownership(client: TestClient) -> None:
+    user_a = _signup(client, "contracts-google-owner-a@example.com")
+    token_a = user_a["tokens"]["access_token"]
+    tenant_a = _setup_tenant(client, token_a)
+
+    user_b = _signup(client, "contracts-google-owner-b@example.com")
+    token_b = user_b["tokens"]["access_token"]
+
+    denied_status = client.get(f"/v1/tenants/{tenant_a}/google/status", headers={"Authorization": f"Bearer {token_b}"})
+    denied_connect = client.post(
+        f"/v1/tenants/{tenant_a}/google/connect/start",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    denied_disconnect = client.post(
+        f"/v1/tenants/{tenant_a}/google/disconnect",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert denied_status.status_code == 404
+    assert denied_connect.status_code == 404
+    assert denied_disconnect.status_code == 404

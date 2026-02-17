@@ -12,7 +12,14 @@ from app.config import get_settings
 from app.monitor import TenantMonitor
 from app.publisher import EventPublisher
 from app.runtime_manager import RuntimeErrorManager, RuntimeManager
-from app.schemas import ApplyConfigRequest, GenericResponse, HealthResponse, ProvisionRequest, RuntimeActionRequest
+from app.schemas import (
+    ApplyConfigRequest,
+    GenericResponse,
+    GoogleConnectRequest,
+    HealthResponse,
+    ProvisionRequest,
+    RuntimeActionRequest,
+)
 
 
 settings = get_settings()
@@ -270,6 +277,54 @@ async def whatsapp_disconnect(tenant_id: str, authorization: str | None = Header
         await publisher.publish(tenant_id, "runtime.error", {"error": exc.code, "message": exc.message})
         raise _runtime_http_error(exc) from exc
     return GenericResponse(tenant_id=tenant_id, detail="whatsapp_disconnected")
+
+
+@app.post("/internal/tenants/{tenant_id}/google/connect", response_model=GenericResponse)
+async def google_connect(
+    tenant_id: str,
+    body: GoogleConnectRequest,
+    authorization: str | None = Header(default=None),
+) -> GenericResponse:
+    require_internal_auth(tenant_id, "google_connect", authorization)
+    try:
+        runtime_manager.validate_layout(tenant_id, require_existing=True)
+        running, _status = runtime_manager.is_running(tenant_id)
+        if running:
+            await monitor.stop(tenant_id)
+            runtime_manager.compose_stop(tenant_id)
+
+        runtime_manager.write_google_token(tenant_id, body.token_json)
+
+        if running:
+            runtime_manager.compose_start(tenant_id)
+            await monitor.start(tenant_id)
+        await publisher.publish(tenant_id, "google.connected", {"restarted_runtime": running})
+    except RuntimeErrorManager as exc:
+        await publisher.publish(tenant_id, "google.error", {"error": exc.code, "message": exc.message})
+        raise _runtime_http_error(exc) from exc
+    return GenericResponse(tenant_id=tenant_id, detail="google_connected")
+
+
+@app.post("/internal/tenants/{tenant_id}/google/disconnect", response_model=GenericResponse)
+async def google_disconnect(tenant_id: str, authorization: str | None = Header(default=None)) -> GenericResponse:
+    require_internal_auth(tenant_id, "google_disconnect", authorization)
+    try:
+        runtime_manager.validate_layout(tenant_id, require_existing=True)
+        running, _status = runtime_manager.is_running(tenant_id)
+        if running:
+            await monitor.stop(tenant_id)
+            runtime_manager.compose_stop(tenant_id)
+
+        runtime_manager.clear_google_token(tenant_id)
+
+        if running:
+            runtime_manager.compose_start(tenant_id)
+            await monitor.start(tenant_id)
+        await publisher.publish(tenant_id, "google.disconnected", {"restarted_runtime": running})
+    except RuntimeErrorManager as exc:
+        await publisher.publish(tenant_id, "google.error", {"error": exc.code, "message": exc.message})
+        raise _runtime_http_error(exc) from exc
+    return GenericResponse(tenant_id=tenant_id, detail="google_disconnected")
 
 
 @app.get("/internal/tenants/{tenant_id}/health", response_model=HealthResponse)

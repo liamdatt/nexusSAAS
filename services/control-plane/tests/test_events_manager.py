@@ -197,3 +197,35 @@ def test_runtime_projection_ignores_reconcile_running_state() -> None:
         assert runtime.actual_state == "running"
     finally:
         db.close()
+
+
+def test_google_events_are_persisted() -> None:
+    init_db()
+    db = SessionLocal()
+    try:
+        user = User(email="events-google@example.com", password_hash="x")
+        db.add(user)
+        db.flush()
+        db.add(Tenant(id="goog123", owner_user_id=user.id, status="pending_pairing", worker_id="worker-goog123"))
+        db.commit()
+    finally:
+        db.close()
+
+    manager = EventManager(SessionLocal)
+    asyncio.run(manager._persist_and_broadcast({"tenant_id": "goog123", "type": "google.connected", "payload": {}}))
+    asyncio.run(
+        manager._persist_and_broadcast({"tenant_id": "goog123", "type": "google.disconnected", "payload": {"reason": "requested"}})
+    )
+
+    db = SessionLocal()
+    try:
+        rows = list(
+            db.scalars(
+                select(RuntimeEvent)
+                .where(RuntimeEvent.tenant_id == "goog123")
+                .where(RuntimeEvent.type.in_(["google.connected", "google.disconnected"]))
+            ).all()
+        )
+        assert len(rows) == 2
+    finally:
+        db.close()

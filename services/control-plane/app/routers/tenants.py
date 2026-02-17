@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import secrets
 import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
+from jose import JWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -12,11 +15,24 @@ from sqlalchemy.orm import Session
 from app.crypto import SecretCipher
 from app.db import get_db
 from app.deps import get_current_user
+from app.google_oauth import (
+    build_google_consent_url,
+    ensure_google_oauth_configured,
+    ensure_origin_allowed,
+    exchange_code_for_tokens,
+    parse_allowed_origins,
+    request_origin,
+    token_expiry_iso,
+    token_scopes,
+)
 from app.models import ConfigRevision, PromptRevision, RuntimeEvent, SkillRevision, Tenant, TenantRuntime, TenantSecret, User
 from app.runner_client import RunnerClient, RunnerError
+from app.security import create_google_oauth_state, decode_google_oauth_state
 from app.schemas import (
     ConfigOut,
     ConfigPatchRequest,
+    GoogleConnectStartOut,
+    GoogleStatusOut,
     OperationAccepted,
     PromptOut,
     PromptPutRequest,
@@ -30,6 +46,7 @@ from app.schemas import (
 
 
 router = APIRouter(prefix="/v1/tenants", tags=["tenants"])
+oauth_router = APIRouter(prefix="/v1/oauth", tags=["oauth"])
 runner = RunnerClient()
 cipher = SecretCipher()
 logger = logging.getLogger(__name__)
@@ -103,6 +120,78 @@ async def _runner_call(request: Request, tenant_id: str, action: str, call) -> N
         error_payload = {"error": exc.code, "message": str(exc), "action": action}
         await _emit(request, tenant_id, "runtime.error", error_payload)
         raise HTTPException(status_code=exc.status_code, detail=error_payload) from exc
+
+
+def _tenant_secret_row(db: Session, tenant_id: str) -> TenantSecret:
+    secret = db.get(TenantSecret, tenant_id)
+    if secret is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant secrets not found")
+    return secret
+
+
+def _load_secret_payload(secret: TenantSecret) -> dict:
+    decrypted = cipher.decrypt(secret.encrypted_blob)
+    if isinstance(decrypted, dict):
+        return dict(decrypted)
+    return {}
+
+
+def _save_secret_payload(secret: TenantSecret, payload: dict) -> None:
+    secret.encrypted_blob = cipher.encrypt(payload)
+    secret.key_version = cipher.key_version
+
+
+def _google_status_payload(tenant_id: str, secret_payload: dict) -> GoogleStatusOut:
+    google_blob = secret_payload.get("google_oauth")
+    connected = isinstance(google_blob, dict) and isinstance(google_blob.get("token_json"), dict)
+    connected_at_raw = google_blob.get("connected_at") if isinstance(google_blob, dict) else None
+    connected_at: datetime | None = None
+    if isinstance(connected_at_raw, str):
+        try:
+            connected_at = datetime.fromisoformat(connected_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            connected_at = None
+    scopes = google_blob.get("scopes") if isinstance(google_blob, dict) else []
+    if not isinstance(scopes, list):
+        scopes = []
+    scopes = [str(scope) for scope in scopes if isinstance(scope, str)]
+    last_error = secret_payload.get("google_oauth_last_error")
+    return GoogleStatusOut(
+        tenant_id=tenant_id,
+        connected=connected,
+        connected_at=connected_at,
+        scopes=scopes,
+        last_error=str(last_error) if isinstance(last_error, str) and last_error.strip() else None,
+    )
+
+
+def _popup_html(origin: str, payload: dict) -> HTMLResponse:
+    serialized = json.dumps(payload).replace("</", "<\\/")
+    target_origin = json.dumps(origin)
+    body = f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Google OAuth</title>
+  </head>
+  <body>
+    <script>
+      (function() {{
+        const payload = {serialized};
+        try {{
+          if (window.opener) {{
+            window.opener.postMessage(payload, {target_origin});
+          }}
+        }} catch (_err) {{}}
+        window.close();
+        document.body.innerText = payload.status === "ok"
+          ? "Google account connected. You can close this window."
+          : "Google account connection failed. You can close this window.";
+      }})();
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=body)
 
 
 @router.post("/setup", response_model=TenantOut)
@@ -356,6 +445,200 @@ async def whatsapp_disconnect(
     await _emit(request, tenant_id, "whatsapp.disconnected", {"reason": "requested"})
     await _emit(request, tenant_id, "runtime.status", {"state": "pending_pairing"})
     return OperationAccepted(tenant_id=tenant_id, operation="whatsapp_disconnect")
+
+
+@router.post("/{tenant_id}/google/connect/start", response_model=GoogleConnectStartOut)
+async def google_connect_start(
+    tenant_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> GoogleConnectStartOut:
+    _tenant_for_owner(db, tenant_id, user.id)
+    settings = request.app.state.settings
+    ensure_google_oauth_configured(settings)
+
+    allowed_origins = parse_allowed_origins(settings.google_oauth_allowed_origins)
+    origin = request_origin(request)
+    ensure_origin_allowed(origin=origin, allowed_origins=allowed_origins)
+    state_token, expires_in = create_google_oauth_state(user_id=user.id, tenant_id=tenant_id, origin=origin)
+    auth_url = build_google_consent_url(
+        client_id=settings.google_oauth_client_id,
+        redirect_uri=settings.google_oauth_redirect_uri,
+        state=state_token,
+    )
+    return GoogleConnectStartOut(tenant_id=tenant_id, auth_url=auth_url, expires_in_seconds=expires_in)
+
+
+@router.get("/{tenant_id}/google/status", response_model=GoogleStatusOut)
+async def google_status(
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> GoogleStatusOut:
+    _tenant_for_owner(db, tenant_id, user.id)
+    secret = _tenant_secret_row(db, tenant_id)
+    payload = _load_secret_payload(secret)
+    return _google_status_payload(tenant_id, payload)
+
+
+@router.post("/{tenant_id}/google/disconnect", response_model=OperationAccepted)
+async def google_disconnect(
+    tenant_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> OperationAccepted:
+    _tenant_for_owner(db, tenant_id, user.id)
+    secret = _tenant_secret_row(db, tenant_id)
+    payload = _load_secret_payload(secret)
+    payload.pop("google_oauth", None)
+    payload.pop("google_oauth_last_error", None)
+    _save_secret_payload(secret, payload)
+    db.commit()
+
+    await _runner_call(request, tenant_id, "google_disconnect", lambda: runner.google_disconnect(tenant_id))
+    await _emit(request, tenant_id, "google.disconnected", {"reason": "requested"})
+    return OperationAccepted(tenant_id=tenant_id, operation="google_disconnect")
+
+
+@oauth_router.get("/google/callback")
+async def google_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    if not state:
+        return _popup_html(
+            "*",
+            {"type": "google.oauth.result", "status": "error", "error": "Missing OAuth state token"},
+        )
+
+    try:
+        claims = decode_google_oauth_state(state)
+    except JWTError:
+        return _popup_html(
+            "*",
+            {"type": "google.oauth.result", "status": "error", "error": "Invalid or expired OAuth state token"},
+        )
+
+    tenant_id = str(claims.get("tenant_id") or "").strip()
+    origin = str(claims.get("origin") or "").strip()
+    try:
+        user_id = int(claims.get("user_id"))
+    except Exception:  # noqa: BLE001
+        return _popup_html(
+            origin or "*",
+            {"type": "google.oauth.result", "status": "error", "error": "Invalid OAuth state payload"},
+        )
+
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.owner_user_id == user_id))
+    if tenant is None:
+        return _popup_html(
+            origin or "*",
+            {"type": "google.oauth.result", "status": "error", "error": "Tenant not found for OAuth state"},
+        )
+
+    settings = request.app.state.settings
+    try:
+        ensure_google_oauth_configured(settings)
+        allowed_origins = parse_allowed_origins(settings.google_oauth_allowed_origins)
+        ensure_origin_allowed(origin=origin, allowed_origins=allowed_origins)
+
+        if error:
+            details = (error_description or error).strip() or "Google authorization was denied"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "google_oauth_denied", "message": details},
+            )
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "google_oauth_missing_code", "message": "Missing OAuth code"},
+            )
+
+        token_payload = await exchange_code_for_tokens(
+            code=code,
+            client_id=settings.google_oauth_client_id,
+            client_secret=settings.google_oauth_client_secret,
+            redirect_uri=settings.google_oauth_redirect_uri,
+        )
+        refresh_token = token_payload.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "google_oauth_refresh_token_missing",
+                    "message": "Google did not return a refresh token. Disconnect and reconnect with consent.",
+                },
+            )
+
+        access_token = str(token_payload.get("access_token") or "").strip()
+        if not access_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "google_oauth_access_token_missing",
+                    "message": "Google did not return an access token.",
+                },
+            )
+
+        scopes = token_scopes(token_payload)
+        token_json: dict[str, object] = {
+            "token": access_token,
+            "refresh_token": refresh_token,
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": settings.google_oauth_client_id,
+            "client_secret": settings.google_oauth_client_secret,
+            "scopes": scopes,
+        }
+        expiry = token_expiry_iso(token_payload)
+        if expiry:
+            token_json["expiry"] = expiry
+        token_type = token_payload.get("token_type")
+        if isinstance(token_type, str) and token_type.strip():
+            token_json["token_type"] = token_type
+
+        secret = _tenant_secret_row(db, tenant_id)
+        secret_payload = _load_secret_payload(secret)
+        secret_payload["google_oauth"] = {
+            "token_json": token_json,
+            "scopes": scopes,
+            "connected_at": datetime.now(UTC).isoformat(),
+        }
+        secret_payload.pop("google_oauth_last_error", None)
+        _save_secret_payload(secret, secret_payload)
+        db.commit()
+
+        await _runner_call(
+            request,
+            tenant_id,
+            "google_connect",
+            lambda: runner.google_connect(tenant_id, {"token_json": token_json}),
+        )
+        await _emit(request, tenant_id, "google.connected", {"scopes": scopes})
+        return _popup_html(origin, {"type": "google.oauth.result", "status": "ok", "tenant_id": tenant_id})
+    except HTTPException as exc:
+        secret = _tenant_secret_row(db, tenant_id)
+        secret_payload = _load_secret_payload(secret)
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": "google_oauth_error", "message": str(exc.detail)}
+        message = str(detail.get("message") or detail.get("error") or "Google OAuth error")
+        secret_payload["google_oauth_last_error"] = message
+        _save_secret_payload(secret, secret_payload)
+        db.commit()
+        await _emit(request, tenant_id, "google.error", {"message": message})
+        return _popup_html(
+            origin,
+            {
+                "type": "google.oauth.result",
+                "status": "error",
+                "tenant_id": tenant_id,
+                "error": message,
+            },
+        )
 
 
 @router.get("/{tenant_id}/config", response_model=ConfigOut)

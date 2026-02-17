@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from jose import JWTError, jwt
@@ -80,6 +81,30 @@ def create_runner_token(tenant_id: str, action: str) -> str:
 def decode_runner_token(token: str) -> dict:
     settings = get_settings()
     return _decode_token(token, settings.runner_shared_secret, settings.app_jwt_alg, audience="runner")
+
+
+def create_google_oauth_state(*, user_id: int, tenant_id: str, origin: str) -> tuple[str, int]:
+    settings = get_settings()
+    now = datetime.now(UTC)
+    exp = now + timedelta(seconds=settings.google_oauth_state_ttl_seconds)
+    payload = {
+        "type": "google_oauth_state",
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "origin": origin,
+        "nonce": secrets.token_urlsafe(16),
+        "iat": int(now.timestamp()),
+        "exp": int(exp.timestamp()),
+    }
+    return _encode_token(payload, settings.app_jwt_secret, settings.app_jwt_alg), settings.google_oauth_state_ttl_seconds
+
+
+def decode_google_oauth_state(token: str) -> dict:
+    settings = get_settings()
+    claims = _decode_token(token, settings.app_jwt_secret, settings.app_jwt_alg)
+    if claims.get("type") != "google_oauth_state":
+        raise JWTError("invalid_google_oauth_state")
+    return claims
 
 
 def is_token_error(exc: Exception) -> bool:

@@ -1,6 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { api, Tokens, wsUrl } from "@/lib/api";
+import { api, apiBase, Tokens, wsUrl } from "@/lib/api";
 import SpotlightCard from "./ui/SpotlightCard";
 import Orb from "./ui/Orb";
 import { motion, AnimatePresence } from "framer-motion";
@@ -18,6 +18,14 @@ type ConfigResponse = {
     tenant_id: string;
     revision: number;
     env_json: Record<string, string>;
+};
+
+type GoogleStatusResponse = {
+    tenant_id: string;
+    connected: boolean;
+    connected_at?: string | null;
+    scopes?: string[];
+    last_error?: string | null;
 };
 
 type Prompt = { name: string; revision: number; content: string };
@@ -121,6 +129,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [qrState, setQrState] = useState<"idle" | "waiting" | "ready" | "timeout">("idle");
     const [whatsappLinkState, setWhatsappLinkState] = useState<WhatsAppLinkState>("unknown");
     const [isGeneratingQr, setIsGeneratingQr] = useState(false);
+    const [googleConnected, setGoogleConnected] = useState(false);
+    const [googleScopes, setGoogleScopes] = useState<string[]>([]);
+    const [googleBusy, setGoogleBusy] = useState(false);
     const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
     const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
     const [error, setError] = useState("");
@@ -138,6 +149,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const latestQrTokenRef = useRef<string>("");
     const qrStateRef = useRef<"idle" | "waiting" | "ready" | "timeout">("idle");
     const qrRenderGenerationRef = useRef(0);
+    const googlePopupRef = useRef<Window | null>(null);
+    const googlePollIntervalRef = useRef<number | null>(null);
+    const googleMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
 
     // --- Logic Methods (Migrated from page.tsx) ---
     function stopQrPolling() {
@@ -170,6 +184,20 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         setTrackedWhatsappLinkState(nextState);
     }
 
+    function stopGoogleStatusPolling() {
+        if (googlePollIntervalRef.current !== null) {
+            window.clearInterval(googlePollIntervalRef.current);
+            googlePollIntervalRef.current = null;
+        }
+    }
+
+    function clearGoogleMessageHandler() {
+        if (googleMessageHandlerRef.current) {
+            window.removeEventListener("message", googleMessageHandlerRef.current);
+            googleMessageHandlerRef.current = null;
+        }
+    }
+
     function applyIncomingEvents(incoming: EventItem[]) {
         if (incoming.length === 0) return;
         const orderedForState = [...incoming].sort((a, b) => {
@@ -194,6 +222,21 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 applyWhatsappLinkTransition("disconnected", eventId);
             } else if (ev.type === "runtime.status" && (projected === "pending_pairing" || projected === "paused")) {
                 applyWhatsappLinkTransition("disconnected", eventId);
+            } else if (ev.type === "google.connected") {
+                setGoogleConnected(true);
+                const scopes = ev.payload?.scopes;
+                if (Array.isArray(scopes)) {
+                    setGoogleScopes(scopes.filter((item): item is string => typeof item === "string"));
+                }
+            } else if (ev.type === "google.disconnected") {
+                setGoogleConnected(false);
+                setGoogleScopes([]);
+            } else if (ev.type === "google.error") {
+                setGoogleConnected(false);
+                const message = ev.payload?.message;
+                if (typeof message === "string" && message.trim()) {
+                    setError(message);
+                }
             }
 
             const pairBaseline = pairStartMinEventIdRef.current;
@@ -259,6 +302,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             await loadConfig(data.id, token);
             await loadPrompts(data.id, token);
             await loadSkills(data.id, token);
+            await loadGoogleStatus(data.id, token);
         } catch (err) {
             const msg = (err as Error).message;
             try {
@@ -271,6 +315,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                     await loadConfig(existingId, token);
                     await loadPrompts(existingId, token);
                     await loadSkills(existingId, token);
+                    await loadGoogleStatus(existingId, token);
                     return;
                 }
                 if (detail?.detail?.error === "openrouter_api_key_required") {
@@ -320,6 +365,25 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         if (!id || !token) return;
         const data = await api<Skill[]>(`/v1/tenants/${id}/skills`, {}, token);
         setSkills(data);
+    }
+
+    async function loadGoogleStatus(id: string, token: string = tokens.access_token) {
+        if (!id || !token) return;
+        try {
+            const data = await api<GoogleStatusResponse>(`/v1/tenants/${id}/google/status`, {}, token);
+            setGoogleConnected(Boolean(data.connected));
+            setGoogleScopes(Array.isArray(data.scopes) ? data.scopes : []);
+            if (data.last_error) {
+                setError(data.last_error);
+            }
+        } catch (err) {
+            setGoogleConnected(false);
+            setGoogleScopes([]);
+            const message = (err as Error).message;
+            if (!message.includes("google_oauth_not_configured")) {
+                setError(message);
+            }
+        }
     }
 
     async function loadRecentEvents(
@@ -463,6 +527,87 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         }
     }
 
+    async function connectGoogle() {
+        if (!tenantId) return;
+        setGoogleBusy(true);
+        setError("");
+        try {
+            const data = await api<{ tenant_id: string; auth_url: string }>(
+                `/v1/tenants/${tenantId}/google/connect/start`,
+                { method: "POST" },
+                tokens.access_token,
+            );
+            const popup = window.open(
+                data.auth_url,
+                "nexus_google_oauth",
+                "popup=yes,width=520,height=700",
+            );
+            if (!popup) {
+                throw new Error("Popup blocked. Please allow popups and try again.");
+            }
+            googlePopupRef.current = popup;
+
+            const controlOrigin = new URL(apiBase()).origin;
+            stopGoogleStatusPolling();
+            clearGoogleMessageHandler();
+            googlePollIntervalRef.current = window.setInterval(() => {
+                if (tenantId) {
+                    void loadGoogleStatus(tenantId, tokens.access_token);
+                }
+                const popupClosed = !googlePopupRef.current || googlePopupRef.current.closed;
+                if (popupClosed) {
+                    stopGoogleStatusPolling();
+                    clearGoogleMessageHandler();
+                    setGoogleBusy(false);
+                }
+            }, 1500);
+
+            const listener = (event: MessageEvent) => {
+                if (event.origin !== controlOrigin) {
+                    return;
+                }
+                const payload = event.data as { type?: string; status?: string; error?: string };
+                if (payload?.type !== "google.oauth.result") {
+                    return;
+                }
+                if (payload.status === "error" && payload.error) {
+                    setError(payload.error);
+                }
+                stopGoogleStatusPolling();
+                if (googlePopupRef.current && !googlePopupRef.current.closed) {
+                    googlePopupRef.current.close();
+                }
+                googlePopupRef.current = null;
+                setGoogleBusy(false);
+                if (tenantId) {
+                    void loadGoogleStatus(tenantId, tokens.access_token);
+                }
+                clearGoogleMessageHandler();
+            };
+            googleMessageHandlerRef.current = listener;
+            window.addEventListener("message", listener);
+        } catch (err) {
+            setGoogleBusy(false);
+            stopGoogleStatusPolling();
+            clearGoogleMessageHandler();
+            setError((err as Error).message);
+        }
+    }
+
+    async function disconnectGoogle() {
+        if (!tenantId) return;
+        setGoogleBusy(true);
+        setError("");
+        try {
+            await api(`/v1/tenants/${tenantId}/google/disconnect`, { method: "POST" }, tokens.access_token);
+            await loadGoogleStatus(tenantId, tokens.access_token);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setGoogleBusy(false);
+        }
+    }
+
     async function saveConfig() {
         if (!tokens || !tenantId) return;
         setBusy(true);
@@ -558,6 +703,18 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tokens]);
 
+    useEffect(() => {
+        return () => {
+            stopGoogleStatusPolling();
+            clearGoogleMessageHandler();
+            if (googlePopupRef.current && !googlePopupRef.current.closed) {
+                googlePopupRef.current.close();
+            }
+            googlePopupRef.current = null;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // WebSocket
     useEffect(() => {
         if (!tenantId) return;
@@ -592,6 +749,12 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     // Reset logic when tenantId changes
     useEffect(() => {
         stopQrPolling();
+        stopGoogleStatusPolling();
+        clearGoogleMessageHandler();
+        if (googlePopupRef.current && !googlePopupRef.current.closed) {
+            googlePopupRef.current.close();
+        }
+        googlePopupRef.current = null;
         latestEventIdRef.current = null;
         pairStartMinEventIdRef.current = -1;
         pairStartBoundaryEventIdRef.current = null;
@@ -603,8 +766,12 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         setTrackedQrState("idle");
         setTrackedWhatsappLinkState("unknown");
         setIsGeneratingQr(false);
+        setGoogleConnected(false);
+        setGoogleScopes([]);
+        setGoogleBusy(false);
         if (tenantId) {
             void loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
+            void loadGoogleStatus(tenantId, tokens.access_token);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenantId]);
@@ -629,6 +796,16 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         }
         return "SIGNAL LOSS · UNPAIRED";
     }, [whatsappLinkState]);
+
+    const googleStatusText = useMemo(() => {
+        if (googleConnected) {
+            return "GOOGLE SERVICES CONNECTED";
+        }
+        if (googleBusy) {
+            return "CONNECTING...";
+        }
+        return "GOOGLE SERVICES DISCONNECTED";
+    }, [googleBusy, googleConnected]);
 
 
     // --- Render ---
@@ -810,6 +987,50 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                             </motion.div>
                                         )}
                                     </AnimatePresence>
+                                </div>
+                            </div>
+
+                            {/* Google Integration */}
+                            <div className="mt-8 pt-8 border-t border-[rgba(255,255,255,0.04)]">
+                                <h3 className="text-sm font-display text-white mb-4 tracking-widest flex items-center gap-2">
+                                    <span className="w-1 h-5 bg-[--status-success] rounded-full opacity-60" />
+                                    IDENTITY · GOOGLE
+                                </h3>
+                                <div className="flex flex-col md:flex-row gap-6 items-start">
+                                    <div className="flex-1 space-y-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-2 h-2 rounded-full transition-all ${googleConnected
+                                                    ? "bg-[--status-success] shadow-[0_0_8px_var(--status-success)]"
+                                                    : googleBusy
+                                                        ? "bg-[--accent-gold] animate-pulse"
+                                                        : "bg-[--text-muted]"
+                                                }`} />
+                                            <span className="text-[--text-secondary] font-mono text-xs tracking-wider">
+                                                {googleStatusText}
+                                            </span>
+                                        </div>
+                                        {googleScopes.length > 0 && (
+                                            <p className="text-[--text-muted] font-mono text-[10px] break-all">
+                                                SCOPES: {googleScopes.join(", ")}
+                                            </p>
+                                        )}
+                                        <button
+                                            onClick={() => {
+                                                if (googleConnected) {
+                                                    void disconnectGoogle();
+                                                    return;
+                                                }
+                                                void connectGoogle();
+                                            }}
+                                            disabled={busy || googleBusy}
+                                            className={`w-full py-2.5 rounded-lg font-mono text-xs uppercase tracking-[0.2em] transition-all disabled:opacity-30 ${googleConnected
+                                                    ? "border border-[--status-error] text-[--status-error] bg-[rgba(255,50,50,0.04)] hover:bg-[rgba(255,50,50,0.1)]"
+                                                    : "border border-[--status-success] text-[--status-success] bg-[rgba(0,255,148,0.05)] hover:bg-[rgba(0,255,148,0.1)]"
+                                                }`}
+                                        >
+                                            {googleBusy ? "Connecting..." : googleConnected ? "Disconnect Google" : "Connect Google"}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </SpotlightCard>

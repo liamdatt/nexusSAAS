@@ -30,12 +30,16 @@ Monorepo for Nexus SaaS with a strict split between:
 - `POST /tenants/{tenant_id}/runtime/restart`
 - `POST /tenants/{tenant_id}/whatsapp/pair/start`
 - `POST /tenants/{tenant_id}/whatsapp/disconnect`
+- `POST /tenants/{tenant_id}/google/connect/start`
+- `GET /tenants/{tenant_id}/google/status`
+- `POST /tenants/{tenant_id}/google/disconnect`
 - `GET /tenants/{tenant_id}/config`
 - `PATCH /tenants/{tenant_id}/config`
 - `GET /tenants/{tenant_id}/prompts`
 - `PUT /tenants/{tenant_id}/prompts/{name}`
 - `GET /tenants/{tenant_id}/skills`
 - `PUT /tenants/{tenant_id}/skills/{skill_id}`
+- `GET /oauth/google/callback`
 - `GET /events/ws` (websocket)
 
 ## Runner Internal API (`/internal`, private only)
@@ -47,6 +51,8 @@ Monorepo for Nexus SaaS with a strict split between:
 - `POST /internal/tenants/{tenant_id}/pair/start`
 - `POST /internal/tenants/{tenant_id}/apply-config`
 - `POST /internal/tenants/{tenant_id}/whatsapp/disconnect`
+- `POST /internal/tenants/{tenant_id}/google/connect`
+- `POST /internal/tenants/{tenant_id}/google/disconnect`
 - `GET /internal/tenants/{tenant_id}/health`
 - `DELETE /internal/tenants/{tenant_id}`
 
@@ -119,6 +125,14 @@ Environment examples:
 - `/Users/liamdatt/Desktop/saas/deploy/coolify-vps1/web.env.example`
 - `/Users/liamdatt/Desktop/saas/deploy/control-vps/.env.example`
 - `/Users/liamdatt/Desktop/saas/deploy/worker-vps/.env.example`
+
+Google OAuth envs (control-plane):
+
+- `GOOGLE_OAUTH_CLIENT_ID`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REDIRECT_URI` (must exactly match Google Cloud OAuth redirect)
+- `GOOGLE_OAUTH_ALLOWED_ORIGINS` (comma-separated web origins allowed to start popup flow)
+- `GOOGLE_OAUTH_STATE_TTL_SECONDS` (default `600`)
 
 Build and push pinned runtime image from an exact NEXUS commit:
 

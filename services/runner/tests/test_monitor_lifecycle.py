@@ -218,3 +218,112 @@ def test_disconnect_resets_session_before_restarting_monitor(monkeypatch) -> Non
         "monitor.start",
         "publish.disconnected",
     ]
+
+
+def test_google_connect_restarts_only_when_runtime_running(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _is_running(tenant_id: str) -> tuple[bool, str]:
+        assert tenant_id == "abc123"
+        calls.append("runtime.is_running")
+        return True, "Up 2m"
+
+    async def _monitor_stop(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.stop")
+
+    def _compose_stop(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("compose.stop")
+
+    def _write_google_token(tenant_id: str, token_json: dict[str, object]) -> None:
+        assert tenant_id == "abc123"
+        assert token_json["token"] == "abc"
+        calls.append("google.write_token")
+
+    def _compose_start(tenant_id: str, nexus_image: str | None = None) -> None:
+        assert tenant_id == "abc123"
+        assert nexus_image is None
+        calls.append("compose.start")
+
+    async def _monitor_start(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.start")
+
+    async def _publish(tenant_id: str, event_type: str, payload: dict) -> None:
+        assert tenant_id == "abc123"
+        assert event_type == "google.connected"
+        assert payload == {"restarted_runtime": True}
+        calls.append("publish.connected")
+
+    monkeypatch.setattr(main.runtime_manager, "is_running", _is_running)
+    monkeypatch.setattr(main.runtime_manager, "validate_layout", lambda tenant_id, require_existing: None)
+    monkeypatch.setattr(main.monitor, "stop", _monitor_stop)
+    monkeypatch.setattr(main.runtime_manager, "compose_stop", _compose_stop)
+    monkeypatch.setattr(main.runtime_manager, "write_google_token", _write_google_token)
+    monkeypatch.setattr(main.runtime_manager, "compose_start", _compose_start)
+    monkeypatch.setattr(main.monitor, "start", _monitor_start)
+    monkeypatch.setattr(main.publisher, "publish", _publish)
+
+    token = _token("abc123", "google_connect")
+    result = asyncio.run(
+        main.google_connect(
+            "abc123",
+            body=main.GoogleConnectRequest(token_json={"token": "abc", "refresh_token": "ref"}),
+            authorization=f"Bearer {token}",
+        )
+    )
+
+    assert result.detail == "google_connected"
+    assert calls == [
+        "runtime.is_running",
+        "monitor.stop",
+        "compose.stop",
+        "google.write_token",
+        "compose.start",
+        "monitor.start",
+        "publish.connected",
+    ]
+
+
+def test_google_disconnect_does_not_restart_when_runtime_paused(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _is_running(tenant_id: str) -> tuple[bool, str]:
+        assert tenant_id == "abc123"
+        calls.append("runtime.is_running")
+        return False, "Exited"
+
+    def _clear_google_token(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("google.clear_token")
+
+    async def _publish(tenant_id: str, event_type: str, payload: dict) -> None:
+        assert tenant_id == "abc123"
+        assert event_type == "google.disconnected"
+        assert payload == {"restarted_runtime": False}
+        calls.append("publish.disconnected")
+
+    monitor_stop = AsyncMock()
+    compose_stop = Mock()
+    compose_start = Mock()
+    monitor_start = AsyncMock()
+
+    monkeypatch.setattr(main.runtime_manager, "is_running", _is_running)
+    monkeypatch.setattr(main.runtime_manager, "validate_layout", lambda tenant_id, require_existing: None)
+    monkeypatch.setattr(main.runtime_manager, "clear_google_token", _clear_google_token)
+    monkeypatch.setattr(main.publisher, "publish", _publish)
+    monkeypatch.setattr(main.monitor, "stop", monitor_stop)
+    monkeypatch.setattr(main.runtime_manager, "compose_stop", compose_stop)
+    monkeypatch.setattr(main.runtime_manager, "compose_start", compose_start)
+    monkeypatch.setattr(main.monitor, "start", monitor_start)
+
+    token = _token("abc123", "google_disconnect")
+    result = asyncio.run(main.google_disconnect("abc123", authorization=f"Bearer {token}"))
+
+    assert result.detail == "google_disconnected"
+    assert calls == ["runtime.is_running", "google.clear_token", "publish.disconnected"]
+    monitor_stop.assert_not_awaited()
+    monitor_start.assert_not_awaited()
+    compose_stop.assert_not_called()
+    compose_start.assert_not_called()

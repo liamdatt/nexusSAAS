@@ -55,6 +55,12 @@ class RuntimeManager:
     def skills_dir(self, tenant_id: str) -> Path:
         return self.config_dir(tenant_id) / "skills"
 
+    def google_dir(self, tenant_id: str) -> Path:
+        return self.config_dir(tenant_id) / "google"
+
+    def google_token_path(self, tenant_id: str) -> Path:
+        return self.google_dir(tenant_id) / "token.json"
+
     def compose_file(self, tenant_id: str) -> Path:
         return self.tenant_dir(tenant_id) / "docker-compose.yml"
 
@@ -212,6 +218,17 @@ class RuntimeManager:
             for existing in self.skills_dir(tenant_id).glob("*.md"):
                 if existing.resolve() not in expected_paths:
                     existing.unlink(missing_ok=True)
+
+    def write_google_token(self, tenant_id: str, token_json: dict[str, object]) -> Path:
+        self.ensure_layout(tenant_id)
+        self.google_dir(tenant_id).mkdir(parents=True, exist_ok=True)
+        path = self.google_token_path(tenant_id)
+        path.write_text(json.dumps(token_json, indent=2), encoding="utf-8")
+        return path
+
+    def clear_google_token(self, tenant_id: str) -> None:
+        self.ensure_layout(tenant_id)
+        self.google_token_path(tenant_id).unlink(missing_ok=True)
 
     def _safe_config_item_name(self, value: str, *, field: str) -> str:
         name = value.strip()

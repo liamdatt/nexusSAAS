@@ -69,6 +69,16 @@ class RunnerClient:
             "POST", f"/internal/tenants/{tenant_id}/whatsapp/disconnect", tenant_id, "whatsapp_disconnect"
         )
 
+    async def google_connect(self, tenant_id: str, payload: dict) -> dict:
+        return await self._request(
+            "POST", f"/internal/tenants/{tenant_id}/google/connect", tenant_id, "google_connect", payload
+        )
+
+    async def google_disconnect(self, tenant_id: str) -> dict:
+        return await self._request(
+            "POST", f"/internal/tenants/{tenant_id}/google/disconnect", tenant_id, "google_disconnect"
+        )
+
     async def apply_config(self, tenant_id: str, payload: dict) -> dict:
         return await self._request(
             "POST", f"/internal/tenants/{tenant_id}/apply-config", tenant_id, "apply_config", payload

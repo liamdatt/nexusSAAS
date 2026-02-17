@@ -50,4 +50,5 @@ async def healthz() -> dict:
 
 app.include_router(auth.router)
 app.include_router(tenants.router)
+app.include_router(tenants.oauth_router)
 app.include_router(events_ws.router)

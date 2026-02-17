@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     secrets_master_key_b64: str = ""
 
     ratelimit_signup_per_minute: int = Field(default=10, ge=1)
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+    google_oauth_allowed_origins: str = ""
+    google_oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
 
 
 @lru_cache(maxsize=1)

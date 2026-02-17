@@ -47,6 +47,28 @@ def test_runtime_files_render(tmp_path: Path, monkeypatch) -> None:
     assert list(manager.skills_dir("abc123").glob("*.md")) == [manager.skills_dir("abc123") / "alpha.md"]
 
 
+def test_google_token_write_and_clear(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+
+    token_payload = {"token": "abc", "refresh_token": "refresh"}
+    path = manager.write_google_token("abc123", token_payload)
+    assert path == manager.google_token_path("abc123")
+    assert path.exists()
+
+    manager.clear_google_token("abc123")
+    assert not path.exists()
+
+
 def test_write_runtime_env_preserves_bridge_secret_when_omitted(tmp_path: Path, monkeypatch) -> None:
     compose_template = tmp_path / "compose.tmpl"
     env_template = tmp_path / "env.tmpl"

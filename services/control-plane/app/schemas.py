@@ -64,6 +64,20 @@ class OperationAccepted(BaseModel):
     accepted: bool = True
 
 
+class GoogleConnectStartOut(BaseModel):
+    tenant_id: str
+    auth_url: str
+    expires_in_seconds: int
+
+
+class GoogleStatusOut(BaseModel):
+    tenant_id: str
+    connected: bool
+    connected_at: datetime | None = None
+    scopes: list[str] = Field(default_factory=list)
+    last_error: str | None = None
+
+
 class ConfigOut(BaseModel):
     tenant_id: str
     revision: int
