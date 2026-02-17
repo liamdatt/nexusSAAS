@@ -327,3 +327,115 @@ def test_google_disconnect_does_not_restart_when_runtime_paused(monkeypatch) -> 
     monitor_start.assert_not_awaited()
     compose_stop.assert_not_called()
     compose_start.assert_not_called()
+
+
+def test_apply_config_restarts_only_when_runtime_running(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _is_running(tenant_id: str) -> tuple[bool, str]:
+        assert tenant_id == "abc123"
+        calls.append("runtime.is_running")
+        return True, "Up 5m"
+
+    def _write_runtime_env(tenant_id: str, env: dict[str, str]) -> None:
+        assert tenant_id == "abc123"
+        assert env == {"A": "1"}
+        calls.append("runtime.write_env")
+
+    def _write_config_files(tenant_id: str, **kwargs) -> None:  # noqa: ANN003
+        assert tenant_id == "abc123"
+        calls.append("runtime.write_config")
+
+    def _compose_restart(tenant_id: str, nexus_image: str | None = None) -> None:
+        assert tenant_id == "abc123"
+        assert nexus_image is None
+        calls.append("runtime.compose_restart")
+
+    async def _monitor_start(tenant_id: str) -> None:
+        assert tenant_id == "abc123"
+        calls.append("monitor.start")
+
+    async def _publish(tenant_id: str, event_type: str, payload: dict) -> None:
+        assert tenant_id == "abc123"
+        assert event_type == "config.applied"
+        assert payload == {"config_revision": 3, "restarted_runtime": True}
+        calls.append("publish.config_applied")
+
+    monkeypatch.setattr(main.runtime_manager, "is_running", _is_running)
+    monkeypatch.setattr(main.runtime_manager, "write_runtime_env", _write_runtime_env)
+    monkeypatch.setattr(main.runtime_manager, "write_config_files", _write_config_files)
+    monkeypatch.setattr(main.runtime_manager, "compose_restart", _compose_restart)
+    monkeypatch.setattr(main.monitor, "start", _monitor_start)
+    monkeypatch.setattr(main.publisher, "publish", _publish)
+
+    token = _token("abc123", "apply_config")
+    result = asyncio.run(
+        main.apply_config(
+            "abc123",
+            body=main.ApplyConfigRequest(env={"A": "1"}, prompts=[], skills=[], config_revision=3),
+            authorization=f"Bearer {token}",
+        )
+    )
+
+    assert result.detail == "config_applied"
+    assert calls == [
+        "runtime.is_running",
+        "runtime.write_env",
+        "runtime.write_config",
+        "runtime.compose_restart",
+        "monitor.start",
+        "publish.config_applied",
+    ]
+
+
+def test_apply_config_does_not_restart_when_runtime_paused(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _is_running(tenant_id: str) -> tuple[bool, str]:
+        assert tenant_id == "abc123"
+        calls.append("runtime.is_running")
+        return False, "Exited"
+
+    def _write_runtime_env(tenant_id: str, env: dict[str, str]) -> None:
+        assert tenant_id == "abc123"
+        assert env == {"A": "1"}
+        calls.append("runtime.write_env")
+
+    def _write_config_files(tenant_id: str, **kwargs) -> None:  # noqa: ANN003
+        assert tenant_id == "abc123"
+        calls.append("runtime.write_config")
+
+    async def _publish(tenant_id: str, event_type: str, payload: dict) -> None:
+        assert tenant_id == "abc123"
+        assert event_type == "config.applied"
+        assert payload == {"config_revision": 4, "restarted_runtime": False}
+        calls.append("publish.config_applied")
+
+    compose_restart = Mock()
+    monitor_start = AsyncMock()
+
+    monkeypatch.setattr(main.runtime_manager, "is_running", _is_running)
+    monkeypatch.setattr(main.runtime_manager, "write_runtime_env", _write_runtime_env)
+    monkeypatch.setattr(main.runtime_manager, "write_config_files", _write_config_files)
+    monkeypatch.setattr(main.runtime_manager, "compose_restart", compose_restart)
+    monkeypatch.setattr(main.monitor, "start", monitor_start)
+    monkeypatch.setattr(main.publisher, "publish", _publish)
+
+    token = _token("abc123", "apply_config")
+    result = asyncio.run(
+        main.apply_config(
+            "abc123",
+            body=main.ApplyConfigRequest(env={"A": "1"}, prompts=[], skills=[], config_revision=4),
+            authorization=f"Bearer {token}",
+        )
+    )
+
+    assert result.detail == "config_applied"
+    assert calls == [
+        "runtime.is_running",
+        "runtime.write_env",
+        "runtime.write_config",
+        "publish.config_applied",
+    ]
+    compose_restart.assert_not_called()
+    monitor_start.assert_not_awaited()

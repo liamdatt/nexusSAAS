@@ -44,7 +44,8 @@ def test_runtime_files_render(tmp_path: Path, monkeypatch) -> None:
     )
     assert (manager.prompts_dir("abc123") / "system.md").exists()
     assert list(manager.prompts_dir("abc123").glob("*.md")) == [manager.prompts_dir("abc123") / "system.md"]
-    assert list(manager.skills_dir("abc123").glob("*.md")) == [manager.skills_dir("abc123") / "alpha.md"]
+    assert not list(manager.skills_dir("abc123").glob("*.md"))
+    assert (manager.skills_dir("abc123") / "alpha" / "SKILL.md").exists()
 
 
 def test_google_token_write_and_clear(tmp_path: Path, monkeypatch) -> None:
@@ -67,6 +68,33 @@ def test_google_token_write_and_clear(tmp_path: Path, monkeypatch) -> None:
 
     manager.clear_google_token("abc123")
     assert not path.exists()
+
+
+def test_skill_layout_migrates_legacy_files_and_prunes_stale_dirs(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.ensure_layout("abc123")
+
+    legacy_flat = manager.skills_dir("abc123") / "legacy.md"
+    legacy_flat.write_text("old", encoding="utf-8")
+    stale_dir = manager.skills_dir("abc123") / "stale"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    (stale_dir / "SKILL.md").write_text("stale", encoding="utf-8")
+
+    manager.write_config_files("abc123", skills=[{"skill_id": "google_workspace", "content": "# Google"}])
+
+    assert not legacy_flat.exists()
+    assert not stale_dir.exists()
+    assert (manager.skills_dir("abc123") / "google_workspace" / "SKILL.md").exists()
 
 
 def test_write_runtime_env_preserves_bridge_secret_when_omitted(tmp_path: Path, monkeypatch) -> None:

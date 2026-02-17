@@ -33,6 +33,7 @@ Monorepo for Nexus SaaS with a strict split between:
 - `POST /tenants/{tenant_id}/google/connect/start`
 - `GET /tenants/{tenant_id}/google/status`
 - `POST /tenants/{tenant_id}/google/disconnect`
+- `POST /tenants/{tenant_id}/assistant/bootstrap`
 - `GET /tenants/{tenant_id}/config`
 - `PATCH /tenants/{tenant_id}/config`
 - `GET /tenants/{tenant_id}/prompts`

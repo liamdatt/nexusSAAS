@@ -78,6 +78,14 @@ class GoogleStatusOut(BaseModel):
     last_error: str | None = None
 
 
+class AssistantBootstrapOut(BaseModel):
+    tenant_id: str
+    applied: bool
+    version: str
+    restarted_runtime: bool
+    reason: str
+
+
 class ConfigOut(BaseModel):
     tenant_id: str
     revision: int

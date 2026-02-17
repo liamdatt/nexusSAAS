@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { api, apiBase, Tokens, wsUrl } from "@/lib/api";
 import SpotlightCard from "./ui/SpotlightCard";
@@ -29,7 +29,6 @@ type GoogleStatusResponse = {
 };
 
 type Prompt = { name: string; revision: number; content: string };
-type Skill = { skill_id: string; revision: number; content: string };
 
 type EventItem = {
     event_id?: number;
@@ -115,30 +114,24 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [configRows, setConfigRows] = useState<ConfigRow[]>([]);
     const [originalConfig, setOriginalConfig] = useState<Record<string, string>>({});
     const [revealedConfigRows, setRevealedConfigRows] = useState<Record<string, boolean>>({});
-    const [promptName, setPromptName] = useState("system");
-    const [promptContent, setPromptContent] = useState("You are Nexus.");
-    const [skillId, setSkillId] = useState("default");
-    const [skillContent, setSkillContent] = useState("# Skill\nDescribe behavior.");
-    const [prompts, setPrompts] = useState<Prompt[]>([]);
-    const [skills, setSkills] = useState<Skill[]>([]);
     const [events, setEvents] = useState<EventItem[]>([]);
     const [latestQr, setLatestQr] = useState("");
     const [qrImageDataUrl, setQrImageDataUrl] = useState("");
-    const [qrRenderError, setQrRenderError] = useState("");
-    const [showRawQrDebug, setShowRawQrDebug] = useState(false);
     const [qrState, setQrState] = useState<"idle" | "waiting" | "ready" | "timeout">("idle");
     const [whatsappLinkState, setWhatsappLinkState] = useState<WhatsAppLinkState>("unknown");
     const [isGeneratingQr, setIsGeneratingQr] = useState(false);
     const [googleConnected, setGoogleConnected] = useState(false);
     const [googleScopes, setGoogleScopes] = useState<string[]>([]);
     const [googleBusy, setGoogleBusy] = useState(false);
-    const [openrouterKeyInput, setOpenrouterKeyInput] = useState("");
-    const [requiresOpenRouterKey, setRequiresOpenRouterKey] = useState(false);
+    const [personaContent, setPersonaContent] = useState("");
+    const [personaBusy, setPersonaBusy] = useState(false);
+    const [personaStatus, setPersonaStatus] = useState("");
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
 
     // Refs for polling/state logic
     const tenantBootstrapAttemptedToken = useRef<string | null>(null);
+    const assistantBootstrapTenantRef = useRef<string | null>(null);
     const latestEventIdRef = useRef<number | null>(null);
     const qrPollGeneration = useRef(0);
     const pairStartMinEventIdRef = useRef<number>(-1);
@@ -296,12 +289,10 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 { method: "POST", body: JSON.stringify(setupPayload) },
                 token,
             );
-            setRequiresOpenRouterKey(false);
             setTenantId(data.id);
             await fetchStatus(data.id, token);
             await loadConfig(data.id, token);
             await loadPrompts(data.id, token);
-            await loadSkills(data.id, token);
             await loadGoogleStatus(data.id, token);
         } catch (err) {
             const msg = (err as Error).message;
@@ -309,18 +300,15 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 const detail = JSON.parse(msg);
                 if (detail?.detail?.tenant_id) {
                     const existingId = detail.detail.tenant_id;
-                    setRequiresOpenRouterKey(false);
                     setTenantId(existingId);
                     await fetchStatus(existingId, token);
                     await loadConfig(existingId, token);
                     await loadPrompts(existingId, token);
-                    await loadSkills(existingId, token);
                     await loadGoogleStatus(existingId, token);
                     return;
                 }
                 if (detail?.detail?.error === "openrouter_api_key_required") {
-                    setRequiresOpenRouterKey(true);
-                    setError("");
+                    setError("NEXUS_OPENROUTER_API_KEY is required in ENV CONFIG before runtime start or pairing.");
                     return;
                 }
             } catch {
@@ -358,13 +346,35 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     async function loadPrompts(id: string, token: string = tokens.access_token) {
         if (!id || !token) return;
         const data = await api<Prompt[]>(`/v1/tenants/${id}/prompts`, {}, token);
-        setPrompts(data);
+        const soulPrompt = data.find((item) => item.name === "SOUL");
+        if (soulPrompt) {
+            setPersonaContent(soulPrompt.content);
+        }
     }
 
-    async function loadSkills(id: string, token: string = tokens.access_token) {
+    async function bootstrapAssistant(id: string, token: string = tokens.access_token) {
         if (!id || !token) return;
-        const data = await api<Skill[]>(`/v1/tenants/${id}/skills`, {}, token);
-        setSkills(data);
+        try {
+            const data = await api<{
+                tenant_id: string;
+                applied: boolean;
+                version: string;
+                restarted_runtime: boolean;
+                reason: string;
+            }>(`/v1/tenants/${id}/assistant/bootstrap`, { method: "POST" }, token);
+            if (!data.applied) {
+                return;
+            }
+            setPersonaStatus(
+                data.restarted_runtime
+                    ? "Applied defaults and restarted runtime."
+                    : "Applied defaults.",
+            );
+            await loadPrompts(id, token);
+            await fetchStatus(id, token);
+        } catch (err) {
+            setError((err as Error).message);
+        }
     }
 
     async function loadGoogleStatus(id: string, token: string = tokens.access_token) {
@@ -383,6 +393,26 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             if (!message.includes("google_oauth_not_configured")) {
                 setError(message);
             }
+        }
+    }
+
+    async function savePersona() {
+        if (!tenantId) return;
+        setPersonaBusy(true);
+        setError("");
+        setPersonaStatus("");
+        try {
+            await api(
+                `/v1/tenants/${tenantId}/prompts/SOUL`,
+                { method: "PUT", body: JSON.stringify({ content: personaContent }) },
+                tokens.access_token,
+            );
+            setPersonaStatus("Assistant profile updated.");
+            await loadPrompts(tenantId, tokens.access_token);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setPersonaBusy(false);
         }
     }
 
@@ -668,12 +698,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
 
         if (!latestQr) {
             setQrImageDataUrl("");
-            setQrRenderError("");
-            setShowRawQrDebug(false);
             return;
         }
 
-        setQrRenderError("");
         void QRCode.toDataURL(latestQr, {
             width: 320,
             margin: 1,
@@ -690,8 +717,9 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             .catch((err: unknown) => {
                 if (qrRenderGenerationRef.current !== generation) return;
                 setQrImageDataUrl("");
-                const message = err instanceof Error ? err.message : "Unable to render QR image.";
-                setQrRenderError(message);
+                if (err instanceof Error) {
+                    console.error("QR render failed:", err.message);
+                }
             });
     }, [latestQr]);
 
@@ -704,6 +732,18 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     }, [tokens]);
 
     useEffect(() => {
+        if (!tenantId) {
+            return;
+        }
+        if (assistantBootstrapTenantRef.current === tenantId) {
+            return;
+        }
+        assistantBootstrapTenantRef.current = tenantId;
+        void bootstrapAssistant(tenantId, tokens.access_token);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tenantId, tokens.access_token]);
+
+    useEffect(() => {
         return () => {
             stopGoogleStatusPolling();
             clearGoogleMessageHandler();
@@ -712,7 +752,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             }
             googlePopupRef.current = null;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // WebSocket
@@ -769,6 +808,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         setGoogleConnected(false);
         setGoogleScopes([]);
         setGoogleBusy(false);
+        setPersonaStatus("");
         if (tenantId) {
             void loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
             void loadGoogleStatus(tenantId, tokens.access_token);
@@ -1137,6 +1177,41 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                     + ADD VARIABLE
                                 </button>
                             </div>
+                        </SpotlightCard>
+                    </motion.div>
+
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.5, delay: 0.55 }}
+                    >
+                        <SpotlightCard className="glass-panel rim-light p-6 rounded-2xl border border-[rgba(255,215,0,0.04)]">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-sm font-display font-bold text-white flex items-center gap-2">
+                                    <span className="w-1.5 h-5 bg-gradient-to-b from-[--status-success] to-transparent rounded-full" />
+                                    AGENT&apos;S PERSONA
+                                </h2>
+                                <button
+                                    onClick={() => void savePersona()}
+                                    disabled={busy || personaBusy}
+                                    className="text-[--status-success] hover:text-black text-[10px] font-mono uppercase tracking-[0.2em] border border-[--status-success] px-4 py-1.5 rounded-lg hover:bg-[--status-success] transition-all disabled:opacity-30"
+                                >
+                                    {personaBusy ? "SAVING..." : "UPDATE"}
+                                </button>
+                            </div>
+                            <p className="text-[--text-muted] text-[10px] font-mono mb-3">
+                                Edit SOUL prompt behavior for this tenant.
+                            </p>
+                            <textarea
+                                value={personaContent}
+                                onChange={(e) => setPersonaContent(e.target.value)}
+                                rows={10}
+                                className="w-full bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)] rounded-lg p-3 text-[--text-secondary] text-xs font-mono focus:border-[--status-success] focus:outline-none"
+                                placeholder="Describe how your assistant should sound and behave..."
+                            />
+                            {personaStatus && (
+                                <p className="mt-3 text-[10px] font-mono text-[--status-success]">{personaStatus}</p>
+                            )}
                         </SpotlightCard>
                     </motion.div>
                 </div>

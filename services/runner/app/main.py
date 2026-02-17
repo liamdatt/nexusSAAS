@@ -158,7 +158,12 @@ async def provision_tenant(
         runtime_env = dict(body.runtime_env)
         runtime_env["BRIDGE_SHARED_SECRET"] = body.bridge_shared_secret
         runtime_manager.write_runtime_env(tenant_id=tenant_id, values=runtime_env)
-        runtime_manager.write_config_files(tenant_id=tenant_id, env=runtime_env, prompts=[], skills=[])
+        runtime_manager.write_config_files(
+            tenant_id=tenant_id,
+            env=runtime_env,
+            prompts=[item.model_dump() for item in body.prompts],
+            skills=[item.model_dump() for item in body.skills],
+        )
         runtime_manager.compose_up(tenant_id)
         await monitor.start(tenant_id)
         await publisher.publish(tenant_id, "runtime.status", {"state": "pending_pairing"})
@@ -243,6 +248,7 @@ async def apply_config(
 ) -> GenericResponse:
     require_internal_auth(tenant_id, "apply_config", authorization)
     try:
+        running, _status = runtime_manager.is_running(tenant_id)
         runtime_manager.write_runtime_env(tenant_id, body.env)
         runtime_manager.write_config_files(
             tenant_id,
@@ -250,12 +256,13 @@ async def apply_config(
             prompts=[item.model_dump() for item in body.prompts],
             skills=[item.model_dump() for item in body.skills],
         )
-        runtime_manager.compose_restart(tenant_id)
-        await monitor.start(tenant_id)
+        if running:
+            runtime_manager.compose_restart(tenant_id)
+            await monitor.start(tenant_id)
         await publisher.publish(
             tenant_id,
             "config.applied",
-            {"config_revision": body.config_revision},
+            {"config_revision": body.config_revision, "restarted_runtime": running},
         )
     except RuntimeErrorManager as exc:
         await publisher.publish(tenant_id, "runtime.error", {"error": exc.code, "message": exc.message})

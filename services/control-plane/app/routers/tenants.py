@@ -12,6 +12,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.assistant_defaults import (
+    ASSISTANT_DEFAULTS_VERSION,
+    PROMPT_DEFAULTS,
+    SKILL_DEFAULTS,
+    prompt_needs_default,
+    skill_needs_default,
+)
 from app.crypto import SecretCipher
 from app.db import get_db
 from app.deps import get_current_user
@@ -29,6 +36,7 @@ from app.models import ConfigRevision, PromptRevision, RuntimeEvent, SkillRevisi
 from app.runner_client import RunnerClient, RunnerError
 from app.security import create_google_oauth_state, decode_google_oauth_state
 from app.schemas import (
+    AssistantBootstrapOut,
     ConfigOut,
     ConfigPatchRequest,
     GoogleConnectStartOut,
@@ -141,6 +149,10 @@ def _save_secret_payload(secret: TenantSecret, payload: dict) -> None:
     secret.key_version = cipher.key_version
 
 
+def _is_runtime_running_state(actual_state: str | None) -> bool:
+    return actual_state in {"running", "pending_pairing", "provisioning"}
+
+
 def _google_status_payload(tenant_id: str, secret_payload: dict) -> GoogleStatusOut:
     google_blob = secret_payload.get("google_oauth")
     connected = isinstance(google_blob, dict) and isinstance(google_blob.get("token_json"), dict)
@@ -230,13 +242,38 @@ async def setup_tenant(
         tenant = Tenant(id=tenant_id, owner_user_id=user.id, status="provisioning", worker_id=worker_id)
         runtime = TenantRuntime(tenant_id=tenant_id, desired_state="stopped", actual_state="provisioning")
         bridge_secret = secrets.token_urlsafe(24)
-        secret_blob = cipher.encrypt({"bridge_shared_secret": bridge_secret})
+        secret_blob = cipher.encrypt(
+            {
+                "bridge_shared_secret": bridge_secret,
+                "assistant_defaults_version": ASSISTANT_DEFAULTS_VERSION,
+            }
+        )
         tenant_secret = TenantSecret(
             tenant_id=tenant_id,
             encrypted_blob=secret_blob,
             key_version=cipher.key_version,
         )
         config_rev = ConfigRevision(tenant_id=tenant_id, revision=1, env_json=initial_env, is_active=True)
+        prompt_revisions = [
+            PromptRevision(
+                tenant_id=tenant_id,
+                name=name,
+                revision=1,
+                content=content,
+                is_active=True,
+            )
+            for name, content in PROMPT_DEFAULTS.items()
+        ]
+        skill_revisions = [
+            SkillRevision(
+                tenant_id=tenant_id,
+                skill_id=skill_id,
+                revision=1,
+                content=content,
+                is_active=True,
+            )
+            for skill_id, content in SKILL_DEFAULTS.items()
+        ]
 
         db.add(tenant)
         try:
@@ -256,7 +293,7 @@ async def setup_tenant(
                 return TenantOut.model_validate(existing, from_attributes=True)
             continue
 
-        db.add_all([runtime, tenant_secret, config_rev])
+        db.add_all([runtime, tenant_secret, config_rev, *prompt_revisions, *skill_revisions])
         try:
             db.commit()
             break
@@ -292,6 +329,8 @@ async def setup_tenant(
         "nexus_image": nexus_image,
         "runtime_env": initial_env,
         "bridge_shared_secret": bridge_secret,
+        "prompts": [{"name": name, "content": content} for name, content in PROMPT_DEFAULTS.items()],
+        "skills": [{"skill_id": skill_id, "content": content} for skill_id, content in SKILL_DEFAULTS.items()],
     }
 
     try:
@@ -639,6 +678,165 @@ async def google_callback(
                 "error": message,
             },
         )
+
+
+@router.post("/{tenant_id}/assistant/bootstrap", response_model=AssistantBootstrapOut)
+async def assistant_bootstrap(
+    tenant_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> AssistantBootstrapOut:
+    _tenant_for_owner(db, tenant_id, user.id)
+    runtime = _runtime_for_tenant(db, tenant_id)
+
+    prompt_rows = db.scalars(
+        select(PromptRevision).where(PromptRevision.tenant_id == tenant_id, PromptRevision.is_active.is_(True))
+    ).all()
+    skill_rows = db.scalars(
+        select(SkillRevision).where(SkillRevision.tenant_id == tenant_id, SkillRevision.is_active.is_(True))
+    ).all()
+    prompt_map = {row.name: row for row in prompt_rows}
+    skill_map = {row.skill_id: row for row in skill_rows}
+
+    prompt_updates: dict[str, str] = {}
+    for name, content in PROMPT_DEFAULTS.items():
+        current = prompt_map.get(name)
+        if prompt_needs_default(name, current.content if current else None):
+            prompt_updates[name] = content
+
+    skill_updates: dict[str, str] = {}
+    for skill_id, content in SKILL_DEFAULTS.items():
+        current = skill_map.get(skill_id)
+        if skill_needs_default(skill_id, current.content if current else None):
+            skill_updates[skill_id] = content
+
+    secret = _tenant_secret_row(db, tenant_id)
+    secret_payload = _load_secret_payload(secret)
+    previous_version = str(secret_payload.get("assistant_defaults_version") or "").strip()
+
+    if not prompt_updates and not skill_updates:
+        if previous_version != ASSISTANT_DEFAULTS_VERSION:
+            secret_payload["assistant_defaults_version"] = ASSISTANT_DEFAULTS_VERSION
+            _save_secret_payload(secret, secret_payload)
+            db.commit()
+        return AssistantBootstrapOut(
+            tenant_id=tenant_id,
+            applied=False,
+            version=ASSISTANT_DEFAULTS_VERSION,
+            restarted_runtime=False,
+            reason="already_bootstrapped",
+        )
+
+    merged_prompts = {row.name: row.content for row in prompt_rows}
+    merged_prompts.update(prompt_updates)
+    merged_skills = {row.skill_id: row.content for row in skill_rows}
+    merged_skills.update(skill_updates)
+    config = db.scalar(select(ConfigRevision).where(ConfigRevision.tenant_id == tenant_id, ConfigRevision.is_active.is_(True)))
+    env_payload = config.env_json if config else {}
+
+    pending_prompt_revisions: list[PromptRevision] = []
+    for name, content in prompt_updates.items():
+        next_rev = (
+            db.scalar(
+                select(func.max(PromptRevision.revision)).where(
+                    PromptRevision.tenant_id == tenant_id,
+                    PromptRevision.name == name,
+                )
+            )
+            or 0
+        ) + 1
+        revision = PromptRevision(
+            tenant_id=tenant_id,
+            name=name,
+            revision=next_rev,
+            content=content,
+            is_active=False,
+        )
+        db.add(revision)
+        pending_prompt_revisions.append(revision)
+
+    pending_skill_revisions: list[SkillRevision] = []
+    for skill_id, content in skill_updates.items():
+        next_rev = (
+            db.scalar(
+                select(func.max(SkillRevision.revision)).where(
+                    SkillRevision.tenant_id == tenant_id,
+                    SkillRevision.skill_id == skill_id,
+                )
+            )
+            or 0
+        ) + 1
+        revision = SkillRevision(
+            tenant_id=tenant_id,
+            skill_id=skill_id,
+            revision=next_rev,
+            content=content,
+            is_active=False,
+        )
+        db.add(revision)
+        pending_skill_revisions.append(revision)
+
+    restarted_runtime = _is_runtime_running_state(runtime.actual_state)
+    try:
+        await _runner_call(
+            request,
+            tenant_id,
+            "assistant_bootstrap_apply_config",
+            lambda: runner.apply_config(
+                tenant_id,
+                {
+                    "env": env_payload,
+                    "prompts": [{"name": name, "content": content} for name, content in merged_prompts.items()],
+                    "skills": [{"skill_id": skill_id, "content": content} for skill_id, content in merged_skills.items()],
+                    "config_revision": config.revision if config else None,
+                },
+            ),
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+
+    if prompt_updates:
+        db.execute(
+            update(PromptRevision)
+            .where(PromptRevision.tenant_id == tenant_id, PromptRevision.name.in_(list(prompt_updates)))
+            .values(is_active=False)
+        )
+        for revision in pending_prompt_revisions:
+            revision.is_active = True
+
+    if skill_updates:
+        db.execute(
+            update(SkillRevision)
+            .where(SkillRevision.tenant_id == tenant_id, SkillRevision.skill_id.in_(list(skill_updates)))
+            .values(is_active=False)
+        )
+        for revision in pending_skill_revisions:
+            revision.is_active = True
+
+    secret_payload["assistant_defaults_version"] = ASSISTANT_DEFAULTS_VERSION
+    _save_secret_payload(secret, secret_payload)
+    db.commit()
+
+    await _emit(
+        request,
+        tenant_id,
+        "assistant.bootstrap.applied",
+        {
+            "version": ASSISTANT_DEFAULTS_VERSION,
+            "restarted_runtime": restarted_runtime,
+            "prompts": sorted(prompt_updates.keys()),
+            "skills": sorted(skill_updates.keys()),
+        },
+    )
+    return AssistantBootstrapOut(
+        tenant_id=tenant_id,
+        applied=True,
+        version=ASSISTANT_DEFAULTS_VERSION,
+        restarted_runtime=restarted_runtime,
+        reason="applied_defaults",
+    )
 
 
 @router.get("/{tenant_id}/config", response_model=ConfigOut)

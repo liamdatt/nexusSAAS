@@ -5,17 +5,6 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class ProvisionRequest(BaseModel):
-    tenant_id: str
-    nexus_image: str | None = None
-    runtime_env: dict[str, str] = Field(default_factory=dict)
-    bridge_shared_secret: str
-
-
-class RuntimeActionRequest(BaseModel):
-    nexus_image: str | None = None
-
-
 class PromptPayload(BaseModel):
     name: str
     content: str
@@ -24,6 +13,19 @@ class PromptPayload(BaseModel):
 class SkillPayload(BaseModel):
     skill_id: str
     content: str
+
+
+class ProvisionRequest(BaseModel):
+    tenant_id: str
+    nexus_image: str | None = None
+    runtime_env: dict[str, str] = Field(default_factory=dict)
+    bridge_shared_secret: str
+    prompts: list[PromptPayload] = Field(default_factory=list)
+    skills: list[SkillPayload] = Field(default_factory=list)
+
+
+class RuntimeActionRequest(BaseModel):
+    nexus_image: str | None = None
 
 
 class ApplyConfigRequest(BaseModel):

@@ -209,15 +209,34 @@ class RuntimeManager:
                     existing.unlink(missing_ok=True)
 
         if skills is not None:
-            expected_paths = set()
+            expected_paths: set[Path] = set()
+            expected_skill_ids: set[str] = set()
             for item in skills:
                 skill_id = self._safe_config_item_name(str(item.get("skill_id", "")), field="skill")
-                target = self.skills_dir(tenant_id) / f"{skill_id}.md"
+                skill_dir = self.skills_dir(tenant_id) / skill_id
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                target = skill_dir / "SKILL.md"
                 target.write_text(str(item.get("content", "")), encoding="utf-8")
                 expected_paths.add(target.resolve())
+                expected_skill_ids.add(skill_id)
+
             for existing in self.skills_dir(tenant_id).glob("*.md"):
-                if existing.resolve() not in expected_paths:
-                    existing.unlink(missing_ok=True)
+                existing.unlink(missing_ok=True)
+
+            for existing in self.skills_dir(tenant_id).iterdir():
+                if existing.is_dir():
+                    if existing.name not in expected_skill_ids:
+                        shutil.rmtree(existing, ignore_errors=True)
+                        continue
+                    for child in existing.iterdir():
+                        if child.resolve() in expected_paths:
+                            continue
+                        if child.is_dir():
+                            shutil.rmtree(child, ignore_errors=True)
+                        else:
+                            child.unlink(missing_ok=True)
+                    continue
+                existing.unlink(missing_ok=True)
 
     def write_google_token(self, tenant_id: str, token_json: dict[str, object]) -> Path:
         self.ensure_layout(tenant_id)

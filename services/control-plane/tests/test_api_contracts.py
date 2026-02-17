@@ -32,6 +32,7 @@ class DummyRunner:
     def __init__(self) -> None:
         self.fail_apply_config = False
         self.provision_payloads: list[dict] = []
+        self.apply_config_payloads: list[dict] = []
         self.start_payloads: list[dict | None] = []
         self.restart_payloads: list[dict | None] = []
         self.pair_start_payloads: list[dict | None] = []
@@ -63,6 +64,7 @@ class DummyRunner:
     async def apply_config(self, tenant_id: str, payload: dict) -> dict:
         if self.fail_apply_config:
             raise RunnerError("apply failed", status_code=502, code="runner_apply_failed")
+        self.apply_config_payloads.append(payload)
         return {"tenant_id": tenant_id, "ok": True}
 
     async def google_connect(self, tenant_id: str, payload: dict) -> dict:
@@ -85,6 +87,7 @@ def client() -> Iterator[TestClient]:
     tenants.runner = DummyRunner()
     tenants.runner.fail_apply_config = False
     tenants.runner.provision_payloads.clear()
+    tenants.runner.apply_config_payloads.clear()
     tenants.runner.start_payloads.clear()
     tenants.runner.restart_payloads.clear()
     tenants.runner.pair_start_payloads.clear()
@@ -169,6 +172,87 @@ def test_control_plane_routes_contract_and_auth(client: TestClient) -> None:
     # Protected route must reject missing auth.
     unauthorized = client.get(f"/v1/tenants/{tenant_id}/status")
     assert unauthorized.status_code == 401
+
+
+def test_setup_seeds_prompt_and_skill_defaults(client: TestClient) -> None:
+    user = _signup(client, "contracts-defaults@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    prompts_resp = client.get(f"/v1/tenants/{tenant_id}/prompts", headers={"Authorization": f"Bearer {token}"})
+    assert prompts_resp.status_code == 200
+    prompts = prompts_resp.json()
+    prompt_names = {item["name"] for item in prompts}
+    assert {"system", "SOUL", "IDENTITY", "AGENTS"}.issubset(prompt_names)
+    identity = next(item for item in prompts if item["name"] == "IDENTITY")
+    assert "FloPro Limited" in identity["content"]
+
+    skills_resp = client.get(f"/v1/tenants/{tenant_id}/skills", headers={"Authorization": f"Bearer {token}"})
+    assert skills_resp.status_code == 200
+    skills = skills_resp.json()
+    assert any(item["skill_id"] == "google_workspace" for item in skills)
+
+    provision_payload = tenants.runner.provision_payloads[-1]
+    assert any(item["name"] == "SOUL" for item in provision_payload["prompts"])
+    assert any(item["skill_id"] == "google_workspace" for item in provision_payload["skills"])
+
+
+def test_assistant_bootstrap_idempotent_when_defaults_present(client: TestClient) -> None:
+    user = _signup(client, "contracts-bootstrap-idempotent@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    resp = client.post(
+        f"/v1/tenants/{tenant_id}/assistant/bootstrap",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tenant_id"] == tenant_id
+    assert body["applied"] is False
+    assert body["restarted_runtime"] is False
+    assert body["reason"] == "already_bootstrapped"
+
+
+def test_assistant_bootstrap_replaces_scaffold_prompt_and_skill(client: TestClient) -> None:
+    user = _signup(client, "contracts-bootstrap-apply@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    soul_scaffold = client.put(
+        f"/v1/tenants/{tenant_id}/prompts/SOUL",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"content": "# Soul\n"},
+    )
+    assert soul_scaffold.status_code == 200
+    skill_scaffold = client.put(
+        f"/v1/tenants/{tenant_id}/skills/google_workspace",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"content": "# Skill\nDescribe behavior."},
+    )
+    assert skill_scaffold.status_code == 200
+
+    tenants.runner.apply_config_payloads.clear()
+    resp = client.post(
+        f"/v1/tenants/{tenant_id}/assistant/bootstrap",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["applied"] is True
+    assert body["restarted_runtime"] is True
+    assert body["reason"] == "applied_defaults"
+
+    prompts_resp = client.get(f"/v1/tenants/{tenant_id}/prompts", headers={"Authorization": f"Bearer {token}"})
+    assert prompts_resp.status_code == 200
+    soul = next(item for item in prompts_resp.json() if item["name"] == "SOUL")
+    assert "personal assistant" in soul["content"].lower()
+
+    skills_resp = client.get(f"/v1/tenants/{tenant_id}/skills", headers={"Authorization": f"Bearer {token}"})
+    assert skills_resp.status_code == 200
+    google_skill = next(item for item in skills_resp.json() if item["skill_id"] == "google_workspace")
+    assert "google workspace skill" in google_skill["content"].lower()
+    assert len(tenants.runner.apply_config_payloads) == 1
 
 
 def test_cross_tenant_isolation(client: TestClient) -> None:
