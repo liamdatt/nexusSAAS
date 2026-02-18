@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates nodejs npm git openssh-client \
+    && apt-get install -y --no-install-recommends curl ca-certificates nodejs npm git openssh-client libreoffice libreoffice-calc fonts-liberation fonts-dejavu-core \
     && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
     && git config --global url."https://github.com/".insteadOf "git@github.com:" \
     && rm -rf /var/lib/apt/lists/*

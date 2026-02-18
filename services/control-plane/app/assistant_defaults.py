@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-ASSISTANT_DEFAULTS_VERSION = "2026-02-17-flopro-v1"
+ASSISTANT_DEFAULTS_VERSION = "2026-02-18-skill-parity-v1"
 
 PROMPT_DEFAULTS: dict[str, str] = {
     "system": """# Nexus System Prompt
@@ -81,18 +81,15 @@ Learn more: https://floproltd.com
 SKILL_DEFAULTS: dict[str, str] = {
     "google_workspace": """# Google Workspace Skill (Hosted)
 
-Use native Nexus Google tools, not shell commands.
+Use native Nexus Google tools only.
 
 ## Tool Map
-- `email`: Gmail search, unread summaries, drafts, send, and replies.
+- `email`: Gmail search, unread summaries, drafts, send, and replies (attachments supported).
 - `calendar`: Event listing, creation, updates, and color lookup.
 - `drive`: Drive search/file discovery and explicit file upload.
 - `contacts`: Contact listing and lookup.
 - `sheets`: Create spreadsheets plus read/update/append/clear/metadata operations.
 - `docs`: Read/export plus create/append/replace document content.
-- `excel`: Local `.xlsx` create/edit workflows for WhatsApp file tasks.
-- `pdf`: Local PDF create/extract/merge plus natural-language page edits.
-- `images`: OpenRouter-based image generation and image editing.
 
 ## Operating Rules
 - Prefer read actions first to gather context.
@@ -101,10 +98,76 @@ Use native Nexus Google tools, not shell commands.
 - Keep payloads explicit and schema-valid.
 
 ## Safety
-- Never send email, change calendar events, or modify sheets/docs without confirmation when the tool requests it.
+- Never send email, change calendar events, or modify docs/sheets without confirmation when the tool requests it.
 - If Google is not connected, tell the user to connect Google from the dashboard.
 """.strip(),
+    "xlsx_professional": """# Professional Excel Skill (Hosted)
+
+Use the `excel` tool for spreadsheet delivery-grade work.
+
+## Goals
+- Produce updateable spreadsheets (prefer formulas over hardcoded computed values).
+- Preserve workbook integrity (no formula errors, explicit assumptions, traceable edits).
+- Keep outputs professional and business-friendly.
+
+## Action Selection
+- Structure and content edits: `write_cells`, `append_rows`, `add_sheet`.
+- Formatting and presentation: `set_number_format`, `set_style`, `add_comment`, `create_chart`.
+- Data movement/normalization: `convert`, `clean_table`.
+- Formula quality gate: `recalc_validate`.
+
+## Quality Rules
+- When introducing formulas, use cell references instead of hardcoded computed results.
+- Use explicit number formats for currency, percentages, and negatives.
+- For assumptions or sourced hardcodes, add comments with source/date context.
+- Run/confirm recalculation validation when formula-heavy changes are requested.
+
+## Safety
+- Treat all write actions as confirmation-gated.
+""".strip(),
+    "pdf_professional": """# Professional PDF Skill (Hosted)
+
+Use the `pdf` tool for production-safe PDF workflows.
+
+## Action Selection
+- `inspect`: page count and metadata before edits.
+- `extract_text`: content review and verification.
+- `create`: generate structured PDFs from text.
+- `merge`: combine multiple PDFs.
+- `edit_page_nl`: natural-language page edits via nano-pdf.
+
+## Reliability Rules
+- Inspect before high-risk edits.
+- For `edit_page_nl`, use explicit page intent and verify output.
+- If page indexing looks off, use `page_index_mode` handling (auto/zero_based/one_based).
+
+## Safety
+- Keep write/edit actions confirmation-gated.
+""".strip(),
+    "images_openrouter": """# OpenRouter Image Skill (Hosted)
+
+Use the `images` tool for image generation/editing via OpenRouter.
+
+## Action Selection
+- `generate`: create new images from prompts.
+- `edit`: transform one or more input images with prompt guidance.
+
+## Controls
+- Model defaults to `google/gemini-2.5-flash-image`.
+- Optional controls: `size`, `resolution`, `output_path`, `model` override.
+- Keep prompts explicit about composition/style and desired output.
+
+## Workflow
+- For edits, always include `input_paths`.
+- Prefer deterministic `output_path` when downstream email/drive workflows are expected.
+
+## Safety
+- Image operations are confirmation-gated.
+""".strip(),
 }
+
+MANAGED_PROMPT_IDS: set[str] = {"system", "IDENTITY", "AGENTS"}
+MANAGED_SKILL_IDS: set[str] = set(SKILL_DEFAULTS.keys())
 
 _PROMPT_SCAFFOLDS: dict[str, set[str]] = {
     "system": {
@@ -127,6 +190,21 @@ _PROMPT_SCAFFOLDS: dict[str, set[str]] = {
 
 _SKILL_SCAFFOLDS: dict[str, set[str]] = {
     "google_workspace": {
+        "",
+        "# Skill",
+        "# Skill\nDescribe behavior.",
+    },
+    "xlsx_professional": {
+        "",
+        "# Skill",
+        "# Skill\nDescribe behavior.",
+    },
+    "pdf_professional": {
+        "",
+        "# Skill",
+        "# Skill\nDescribe behavior.",
+    },
+    "images_openrouter": {
         "",
         "# Skill",
         "# Skill\nDescribe behavior.",

@@ -191,7 +191,10 @@ def test_setup_seeds_prompt_and_skill_defaults(client: TestClient) -> None:
     skills_resp = client.get(f"/v1/tenants/{tenant_id}/skills", headers={"Authorization": f"Bearer {token}"})
     assert skills_resp.status_code == 200
     skills = skills_resp.json()
-    assert any(item["skill_id"] == "google_workspace" for item in skills)
+    seeded_skill_ids = {item["skill_id"] for item in skills}
+    assert {"google_workspace", "xlsx_professional", "pdf_professional", "images_openrouter"}.issubset(
+        seeded_skill_ids
+    )
 
     provision_payload = tenants.runner.provision_payloads[-1]
     assert any(item["name"] == "SOUL" for item in provision_payload["prompts"])
@@ -252,6 +255,38 @@ def test_assistant_bootstrap_replaces_scaffold_prompt_and_skill(client: TestClie
     skills_resp = client.get(f"/v1/tenants/{tenant_id}/skills", headers={"Authorization": f"Bearer {token}"})
     assert skills_resp.status_code == 200
     google_skill = next(item for item in skills_resp.json() if item["skill_id"] == "google_workspace")
+    assert "google workspace skill" in google_skill["content"].lower()
+    assert len(tenants.runner.apply_config_payloads) == 1
+
+
+def test_assistant_bootstrap_overwrites_managed_skills_on_version_bump(client: TestClient, monkeypatch) -> None:
+    user = _signup(client, "contracts-bootstrap-versioned-managed@example.com")
+    token = user["tokens"]["access_token"]
+    tenant_id = _setup_tenant(client, token)
+
+    custom = client.put(
+        f"/v1/tenants/{tenant_id}/skills/google_workspace",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"content": "# Google Workspace Skill\\nCustom tenant override"},
+    )
+    assert custom.status_code == 200
+
+    tenants.runner.apply_config_payloads.clear()
+    monkeypatch.setattr(tenants, "ASSISTANT_DEFAULTS_VERSION", "2099-01-01-managed-refresh")
+
+    resp = client.post(
+        f"/v1/tenants/{tenant_id}/assistant/bootstrap",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["applied"] is True
+    assert body["reason"] == "applied_defaults"
+
+    skills_resp = client.get(f"/v1/tenants/{tenant_id}/skills", headers={"Authorization": f"Bearer {token}"})
+    assert skills_resp.status_code == 200
+    google_skill = next(item for item in skills_resp.json() if item["skill_id"] == "google_workspace")
+    assert "custom tenant override" not in google_skill["content"].lower()
     assert "google workspace skill" in google_skill["content"].lower()
     assert len(tenants.runner.apply_config_payloads) == 1
 

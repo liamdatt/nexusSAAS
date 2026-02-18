@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.assistant_defaults import (
     ASSISTANT_DEFAULTS_VERSION,
+    MANAGED_PROMPT_IDS,
+    MANAGED_SKILL_IDS,
     PROMPT_DEFAULTS,
     SKILL_DEFAULTS,
     prompt_needs_default,
@@ -699,21 +701,28 @@ async def assistant_bootstrap(
     prompt_map = {row.name: row for row in prompt_rows}
     skill_map = {row.skill_id: row for row in skill_rows}
 
+    secret = _tenant_secret_row(db, tenant_id)
+    secret_payload = _load_secret_payload(secret)
+    previous_version = str(secret_payload.get("assistant_defaults_version") or "").strip()
+    defaults_version_changed = previous_version != ASSISTANT_DEFAULTS_VERSION
+
     prompt_updates: dict[str, str] = {}
     for name, content in PROMPT_DEFAULTS.items():
         current = prompt_map.get(name)
+        if defaults_version_changed and name in MANAGED_PROMPT_IDS:
+            prompt_updates[name] = content
+            continue
         if prompt_needs_default(name, current.content if current else None):
             prompt_updates[name] = content
 
     skill_updates: dict[str, str] = {}
     for skill_id, content in SKILL_DEFAULTS.items():
         current = skill_map.get(skill_id)
+        if defaults_version_changed and skill_id in MANAGED_SKILL_IDS:
+            skill_updates[skill_id] = content
+            continue
         if skill_needs_default(skill_id, current.content if current else None):
             skill_updates[skill_id] = content
-
-    secret = _tenant_secret_row(db, tenant_id)
-    secret_payload = _load_secret_payload(secret)
-    previous_version = str(secret_payload.get("assistant_defaults_version") or "").strip()
 
     if not prompt_updates and not skill_updates:
         if previous_version != ASSISTANT_DEFAULTS_VERSION:
