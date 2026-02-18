@@ -18,6 +18,7 @@ type StatusResponse = {
     actual_state: string;
     last_heartbeat?: string | null;
     last_error?: string | null;
+    uptime?: number | null;
 };
 
 type ConfigResponse = {
@@ -199,9 +200,10 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [personaStatus, setPersonaStatus] = useState("");
     const [error, setError] = useState("");
 
-    const [leftPanelOpen, setLeftPanelOpen] = useState(false);
-    const [rightPanelOpen, setRightPanelOpen] = useState(false);
+    const [leftPanelOpen, setLeftPanelOpen] = useState(false); // Kept for legacy/mobile menu if needed, or removed
+    const [rightPanelOpen, setRightPanelOpen] = useState(true);
     const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState<"config" | "soul">("config");
 
     const logEndRef = useRef<HTMLDivElement>(null);
     const tenantBootstrapAttemptedToken = useRef<string | null>(null);
@@ -898,19 +900,14 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         if (layoutInitializedRef.current) return;
         layoutInitializedRef.current = true;
         const desktop = window.matchMedia("(min-width: 1280px)").matches;
-        const laptop = window.matchMedia("(min-width: 1024px)").matches;
+        // Default to OPEN right/bottom on desktop
         if (desktop) {
-            setLeftPanelOpen(true);
             setRightPanelOpen(true);
+            setBottomPanelOpen(true);
             return;
         }
-        if (laptop) {
-            setLeftPanelOpen(true);
-            setRightPanelOpen(false);
-            return;
-        }
-        setLeftPanelOpen(false);
         setRightPanelOpen(false);
+        setBottomPanelOpen(false);
     }, []);
 
     return (
@@ -921,19 +918,18 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             <header className="flex-none h-14 flex items-center justify-between px-6 border-b border-[rgba(255,255,255,0.08)] bg-black/60 backdrop-blur-md z-40 relative">
                 <div className="flex items-center gap-4">
                     <div className="w-8 h-8 relative">
-                        <Orb hue={40} hoverIntensity={0} />
+                        <div className="absolute inset-0 bg-[--accent-gold] rounded-full opacity-20 animate-pulse" />
+                        <div className="absolute inset-2 bg-[--accent-gold] rounded-full animate-ping" />
                     </div>
-                    <h1 className="font-display font-bold text-xl tracking-widest text-shadow-glow">
-                        <span className="text-white">NEXUS</span>
-                        <span className="text-[--accent-gold]">_COMMAND</span>
+                    <h1 className="text-xl font-display font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-white to-[--text-secondary]">
+                        NEXUS <span className="text-[--accent-gold]">COMMAND</span>
                     </h1>
                 </div>
 
                 <div className="flex-1 mx-8 overflow-hidden relative h-full flex items-center">
                     <div className="absolute inset-0 bg-gradient-to-r from-black via-transparent to-black z-10 pointer-events-none" />
                     <div className="whitespace-nowrap animate-marquee font-mono text-[10px] text-[--text-muted]">
-                        SYSTEM_STATUS: ONLINE // UPLINK_STABLE // ENCRYPTION: AES-256 // AGENT_MODE: AUTONOMOUS // NEXUS_CORE_VERSION: 2.4.1 //
-                        SYSTEM_STATUS: ONLINE // UPLINK_STABLE // ENCRYPTION: AES-256 // AGENT_MODE: AUTONOMOUS // NEXUS_CORE_VERSION: 2.4.1 //
+                        :: SYSTEM_READY :: AWAITING_DIRECTIVE :: ENCRYPTION_Key_ROTATION_ACTIVE :: UPLINK_STABLE ::
                     </div>
                 </div>
 
@@ -947,90 +943,104 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                     >
                         Disconnect
                     </button>
+                    <button
+                        onClick={() => setRightPanelOpen(!rightPanelOpen)}
+                        className={`px-3 py-1 border font-mono text-xs transition-colors uppercase ${rightPanelOpen ? "bg-[--accent-gold] text-black border-[--accent-gold]" : "border-[--text-muted] text-[--text-muted]"}`}
+                    >
+                        MENU
+                    </button>
                 </div>
             </header>
 
             <main className="flex-1 relative flex min-h-0 overflow-hidden">
-                <AnimatePresence mode="wait">
-                    {leftPanelOpen && (
-                        <motion.aside
-                            initial={{ x: -300, opacity: 0 }}
-                            animate={{ x: 0, opacity: 1 }}
-                            exit={{ x: -300, opacity: 0 }}
-                            className="absolute left-0 top-0 h-full min-h-0 w-[min(20rem,92vw)] lg:relative lg:w-80 p-3 sm:p-4 flex flex-col gap-4 z-30 bg-black/35 backdrop-blur-sm lg:bg-transparent lg:backdrop-blur-0"
-                        >
-                            <HudPanel title="VITALS_MONITOR" className="flex-none h-56 sm:h-64">
-                                <div className="relative w-full h-full flex items-center justify-center">
-                                    <svg viewBox="0 0 100 100" className="w-40 h-40 animate-spin-slow-reverse opacity-80">
-                                        <circle cx="50" cy="50" r="45" fill="none" stroke="#333" strokeWidth="2" strokeDasharray="4 2" />
-                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#444" strokeWidth="1" />
-                                    </svg>
-                                    <svg viewBox="0 0 100 100" className="w-32 h-32 absolute animate-spin-slow">
-                                        <path d="M50 10 A40 40 0 0 1 90 50" fill="none" stroke="var(--accent-gold)" strokeWidth="4" />
-                                        <path d="M50 90 A40 40 0 0 1 10 50" fill="none" stroke="var(--accent-gold)" strokeWidth="2" opacity="0.5" />
-                                    </svg>
-                                    <div className="absolute text-center">
-                                        <div className="text-3xl font-display font-bold text-white">{runtimeIsActive ? "100" : "0"}%</div>
-                                        <div className="text-[8px] font-mono text-[--text-muted]">SYS_LOAD</div>
+
+                {/* --- CENTER STAGE: OPS GRID --- */}
+                <section className="flex-1 h-full overflow-y-auto p-4 lg:p-8 custom-scrollbar relative z-20">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 max-w-7xl mx-auto">
+
+                        {/* 1. RUNTIME STATUS */}
+                        <HudPanel title="RUNTIME_STATUS" className="h-64">
+                            <div className="flex flex-col h-full justify-between">
+                                <div className="flex items-center gap-4">
+                                    <div className="relative w-24 h-24 flex items-center justify-center">
+                                        <svg viewBox="0 0 100 100" className="w-full h-full animate-spin-slow-reverse opacity-80">
+                                            <circle cx="50" cy="50" r="45" fill="none" stroke="#333" strokeWidth="2" strokeDasharray="4 2" />
+                                            <circle cx="50" cy="50" r="40" fill="none" stroke="#444" strokeWidth="1" />
+                                            <path d="M50 10 A40 40 0 0 1 90 50" fill="none" stroke="var(--accent-gold)" strokeWidth="2" />
+                                        </svg>
+                                        <div className="absolute text-center">
+                                            <div className="text-xl font-display font-bold text-white">{runtimeIsActive ? "ON" : "OFF"}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 space-y-2">
+                                        <div className="flex justify-between border-b border-white/10 pb-1">
+                                            <span className="text-[--text-muted] text-[10px]">STATE</span>
+                                            <span className="text-[--accent-gold] text-xs uppercase">{status?.actual_state ?? "--"}</span>
+                                        </div>
+                                        <div className="flex justify-between border-b border-white/10 pb-1">
+                                            <span className="text-[--text-muted] text-[10px]">UPTIME</span>
+                                            <span className="text-white text-xs">{status?.uptime ? Math.floor(status.uptime / 60) + "m" : "--"}</span>
+                                        </div>
                                     </div>
                                 </div>
-                                <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] font-mono">
-                                    <div className="flex justify-between border-b border-white/10 pb-1">
-                                        <span className="text-[--text-muted]">STATE</span>
-                                        <span className="text-[--accent-gold] uppercase">{status?.actual_state ?? "--"}</span>
+                                <button
+                                    onClick={() => void runOperation(runtimeIsActive ? "stop" : "start")}
+                                    disabled={runtimeBusy}
+                                    className={`w-full py-2 border transition-colors font-mono text-xs uppercase tracking-widest ${runtimeIsActive
+                                        ? "border-[--status-error] text-[--status-error] hover:bg-[--status-error] hover:text-black"
+                                        : "border-[--status-success] text-[--status-success] hover:bg-[--status-success] hover:text-black"}`}
+                                >
+                                    {runtimeIsActive ? "TERMINATE RUNTIME" : "INITIALIZE RUNTIME"}
+                                </button>
+                            </div>
+                        </HudPanel>
+
+                        {/* 2. UPLINK / WHATSAPP */}
+                        <HudPanel title="UPLINK_BRIDGE" className="h-64 md:col-span-1 xl:col-span-1">
+                            <div className="flex flex-col h-full justify-between">
+                                <div>
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <div className={`w-3 h-3 rounded-full ${whatsappIsConnected ? "bg-[#25D366] shadow-[0_0_10px_#25D366]" : "bg-[--status-error]"}`} />
+                                        <span className="font-mono text-xs text-white">{whatsappStatusText}</span>
                                     </div>
-                                    <div className="flex justify-between border-b border-white/10 pb-1">
-                                        <span className="text-[--text-muted]">H_BEAT</span>
-                                        <span className="text-[--status-success]">{status?.last_heartbeat ? "OK" : "--"}</span>
-                                    </div>
+                                    {!whatsappIsConnected && (
+                                        <div className="p-3 bg-white/5 border border-white/10 rounded-sm mb-4">
+                                            <p className="text-[10px] text-[--text-muted] mb-2">
+                                                Scan the QR code to link your WhatsApp account.
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
-                            </HudPanel>
+                                <button
+                                    onClick={() => void runOperation(whatsappIsConnected ? "whatsapp/disconnect" : "pair/start")}
+                                    disabled={runtimeBusy}
+                                    className={`w-full py-2 border transition-colors font-mono text-xs uppercase tracking-widest ${whatsappIsConnected
+                                        ? "border-[--status-error] text-[--status-error] hover:bg-[--status-error] hover:text-black"
+                                        : "border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-black"}`}
+                                >
+                                    {whatsappIsConnected ? "SEVER CONNECTION" : "GENERATE QR LINK"}
+                                </button>
+                            </div>
+                        </HudPanel>
 
-                            <HudPanel title="UPLINK_STATUS" className="flex-1 min-h-0">
-                                <div className="h-full overflow-y-auto pr-1 space-y-4">
-                                    <div className="flex items-center gap-3 p-2 bg-white/5 border-l-2 border-[--status-success]">
-                                        <div className="flex-1">
-                                            <div className="text-xs font-bold text-white mb-1">RUNTIME</div>
-                                            <div className="text-[9px] text-[--text-muted] uppercase">{status?.actual_state ?? "unknown"}</div>
-                                        </div>
-                                        <button
-                                            onClick={() => {
-                                                void runOperation(runtimeIsActive ? "stop" : "start");
-                                            }}
-                                            disabled={runtimeBusy}
-                                            className={`text-[9px] px-2 py-1 border transition-colors ${runtimeIsActive
-                                                ? "border-[--status-error] text-[--status-error] hover:bg-[--status-error] hover:text-black"
-                                                : "border-[--status-success] text-[--status-success] hover:bg-[--status-success] hover:text-black"}`}
-                                        >
-                                            {runtimeIsActive ? "STOP" : "START"}
-                                        </button>
-                                    </div>
-
-                                    <div className="flex items-center gap-3 p-2 bg-white/5 border-l-2 border-[#25D366]">
-                                        <div className="flex-1">
-                                            <div className="text-xs font-bold text-white mb-1">WHATSAPP BRIDGE</div>
-                                            <div className="text-[9px] text-[--text-muted]">STATUS: {whatsappStatusText}</div>
-                                        </div>
-                                        <button
-                                            onClick={() => {
-                                                void runOperation(whatsappIsConnected ? "whatsapp/disconnect" : "pair/start");
-                                            }}
-                                            disabled={runtimeBusy}
-                                            className={`text-[9px] px-2 py-1 border transition-colors ${whatsappIsConnected
-                                                ? "border-[--status-error] text-[--status-error] hover:bg-[--status-error] hover:text-black"
-                                                : "border-[--accent-gold] text-[--accent-gold] hover:bg-[--accent-gold] hover:text-black"}`}
-                                        >
-                                            {whatsappIsConnected ? "DISCONNECT" : "GENERATE QR"}
-                                        </button>
-                                    </div>
-
-                                    {(qrState === "waiting" || qrState === "ready" || qrState === "timeout") && !whatsappIsConnected && (
-                                        <div className="p-3 bg-white/5 border border-white/10 rounded-sm flex flex-col items-center gap-2">
-                                            <div className="text-[9px] text-[--accent-gold] font-mono tracking-wider">SCAN TO AUTHENTICATE</div>
+                        {/* 3. QR MATRIX (Shows only when needed) */}
+                        <AnimatePresence>
+                            {(qrState === "waiting" || qrState === "ready" || qrState === "timeout") && !whatsappIsConnected && (
+                                <motion.div
+                                    initial={{ opacity: 0, scale: 0.9 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    exit={{ opacity: 0, scale: 0.9 }}
+                                    className="h-64 md:col-span-2 xl:col-span-1"
+                                >
+                                    <HudPanel title="QR_MATRIX" variant="warning" className="h-full">
+                                        <div className="flex flex-col items-center justify-center h-full gap-4">
                                             {qrImageDataUrl ? (
-                                                <img src={qrImageDataUrl} alt="WhatsApp QR" className="w-36 h-36 rounded" />
+                                                <div className="relative group cursor-none">
+                                                    <img src={qrImageDataUrl} alt="WhatsApp QR" className="w-40 h-40 rounded-sm border border-[--accent-gold] p-1 bg-white" />
+                                                    <div className="absolute inset-0 bg-[--accent-gold] opacity-0 group-hover:opacity-10 transition-opacity mix-blend-overlay" />
+                                                </div>
                                             ) : (
-                                                <div className="w-36 h-36 flex items-center justify-center bg-black/40 border border-white/10 text-[10px] text-[--text-muted] font-mono text-center whitespace-pre-line px-3">
+                                                <div className="w-40 h-40 flex items-center justify-center bg-black/40 border border-white/10 text-[10px] text-[--text-muted] font-mono text-center whitespace-pre-line px-3 animate-pulse">
                                                     {qrState === "waiting"
                                                         ? isGeneratingQr
                                                             ? "GENERATING QR\nRESTARTING RUNTIME..."
@@ -1040,66 +1050,212 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                                             : "PREPARING..."}
                                                 </div>
                                             )}
+                                            <p className="text-[10px] font-mono text-[--accent-gold] animate-pulse">
+                                                SCAN WITH WHATSAPP (LINKED DEVICES)
+                                            </p>
+                                        </div>
+                                    </HudPanel>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+
+                        {/* 4. GOOGLE SERVICES */}
+                        <HudPanel title="EXTERNAL_SERVICES" className="h-64">
+                            <div className="flex flex-col h-full justify-between">
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between p-3 bg-white/5 border-l-2 border-[#4285F4]">
+                                        <div>
+                                            <div className="text-xs font-bold text-white mb-1">GOOGLE</div>
+                                            <div className="text-[9px] text-[--text-muted]">{googleStatusText}</div>
+                                        </div>
+                                        <div className={`w-2 h-2 rounded-full ${googleConnected ? "bg-[#4285F4]" : "bg-[--text-muted]"}`} />
+                                    </div>
+                                    {googleScopes.length > 0 && (
+                                        <div className="p-2 border border-white/10 bg-black/40 text-[9px] font-mono text-[--text-muted] break-all h-24 overflow-y-auto custom-scrollbar">
+                                            <span className="text-[#4285F4]">SCOPES_GRANTED:</span> {googleScopes.join(", ")}
                                         </div>
                                     )}
-
-                                    <div className="flex items-start gap-3 p-2 bg-white/5 border-l-2 border-[#4285F4]">
-                                        <div className="flex-1">
-                                            <div className="text-xs font-bold text-white mb-1">GOOGLE SERVICES</div>
-                                            <div className="text-[9px] text-[--text-muted]">{googleStatusText}</div>
-                                            {googleScopes.length > 0 && (
-                                                <div className="text-[8px] text-[--text-muted] mt-1 break-all">
-                                                    SCOPES: {googleScopes.join(", ")}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <button
-                                            onClick={() => {
-                                                if (googleConnected) {
-                                                    void disconnectGoogle();
-                                                } else {
-                                                    void connectGoogle();
-                                                }
-                                            }}
-                                            disabled={googleBusy || runtimeBusy}
-                                            className={`text-[9px] px-2 py-1 border transition-colors ${googleConnected
-                                                ? "border-[--status-error] text-[--status-error] hover:bg-[--status-error] hover:text-black"
-                                                : "border-[#4285F4] text-[#4285F4] hover:bg-[#4285F4] hover:text-white"}`}
-                                        >
-                                            {googleBusy ? "CONNECTING" : googleConnected ? "DISCONNECT" : "CONNECT"}
-                                        </button>
-                                    </div>
                                 </div>
-                            </HudPanel>
+                                <button
+                                    onClick={() => {
+                                        if (googleConnected) void disconnectGoogle();
+                                        else void connectGoogle();
+                                    }}
+                                    disabled={googleBusy || runtimeBusy}
+                                    className={`w-full py-2 border transition-colors font-mono text-xs uppercase tracking-widest ${googleConnected
+                                        ? "border-[--status-error] text-[--status-error] hover:bg-[--status-error] hover:text-black"
+                                        : "border-[#4285F4] text-[#4285F4] hover:bg-[#4285F4] hover:text-white"}`}
+                                >
+                                    {googleBusy ? "NEGOTIATING..." : googleConnected ? "REVOKE ACCESS" : "CONNECT GOOGLE"}
+                                </button>
+                            </div>
+                        </HudPanel>
+
+                    </div>
+
+                    {/* Placeholder for future widgets */}
+                    <div className="h-32"></div>
+
+                </section>
+
+                {/* --- RIGHT PANEL: CONFIG & SOUL (Retractable) --- */}
+                <AnimatePresence>
+                    {rightPanelOpen && (
+                        <motion.aside
+                            initial={{ x: 320, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            exit={{ x: 320, opacity: 0 }}
+                            className="absolute right-0 top-0 h-full w-[min(24rem,90vw)] lg:relative lg:w-96 bg-black/90 backdrop-blur-xl border-l border-[rgba(255,255,255,0.1)] z-40 flex flex-col shadow-2xl"
+                        >
+                            {/* Tabs */}
+                            <div className="flex border-b border-[rgba(255,255,255,0.1)]">
+                                <button
+                                    onClick={() => setActiveTab("config")}
+                                    className={`flex-1 py-3 text-xs font-mono tracking-widest transition-colors ${activeTab === "config" ? "bg-[--accent-gold] text-black font-bold" : "text-[--text-muted] hover:text-white"}`}
+                                >
+                                    [SYSTEM_CONFIG]
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab("soul")}
+                                    className={`flex-1 py-3 text-xs font-mono tracking-widest transition-colors ${activeTab === "soul" ? "bg-[--accent-gold] text-black font-bold" : "text-[--text-muted] hover:text-white"}`}
+                                >
+                                    [AGENT_SOUL]
+                                </button>
+                            </div>
+
+                            {/* Content Window */}
+                            <div className="flex-1 overflow-hidden relative">
+                                <AnimatePresence mode="wait">
+                                    {activeTab === "config" ? (
+                                        <motion.div
+                                            key="config"
+                                            initial={{ opacity: 0, x: 20 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: -20 }}
+                                            transition={{ duration: 0.2 }}
+                                            className="absolute inset-0 overflow-y-auto p-4 space-y-6 custom-scrollbar"
+                                        >
+                                            <div className="p-4 border border-[--accent-gold] bg-[--accent-gold]/5 mb-4">
+                                                <h3 className="text-[--accent-gold] text-xs font-bold mb-1">ENVIRONMENT VARIABLES</h3>
+                                                <p className="text-[10px] text-[--text-muted]">Manage sensitive keys and runtime flags.</p>
+                                            </div>
+
+                                            {configManifest.groups.length === 0 && (
+                                                <p className="text-[10px] font-mono text-[--text-muted]">No config loaded.</p>
+                                            )}
+                                            {configManifest.groups.map((group) => (
+                                                <div key={group.category} className="space-y-3">
+                                                    <h3 className="font-mono text-[10px] text-[--text-secondary] uppercase tracking-widest pl-2 border-l border-[--accent-gold]">
+                                                        {group.category}
+                                                    </h3>
+                                                    <div className="space-y-2">
+                                                        {group.items.map((item) => {
+                                                            const isSaving = configBusyKey === item.key;
+                                                            return (
+                                                                <div key={item.key} className="group/item relative">
+                                                                    <label className="block text-[9px] font-mono text-[--text-muted] mb-1 truncate">{item.key}</label>
+                                                                    <div className="relative">
+                                                                        <input
+                                                                            type={item.is_secret ? "password" : "text"}
+                                                                            value={configValues[item.key] ?? ""}
+                                                                            onChange={(e) => {
+                                                                                const next = e.target.value;
+                                                                                setConfigValues((prev) => ({ ...prev, [item.key]: next }));
+                                                                            }}
+                                                                            onBlur={() => void saveConfigValue(item.key)}
+                                                                            disabled={isSaving}
+                                                                            className="w-full bg-white/5 border border-white/10 px-2 py-1.5 font-mono text-[10px] text-[--accent-gold] focus:border-[--accent-gold] focus:outline-none transition-colors group-hover/item:border-white/20 disabled:opacity-50"
+                                                                        />
+                                                                        {item.is_secret && (
+                                                                            <div className="absolute inset-0 bg-black/90 flex items-center px-3 opacity-100 group-hover/item:opacity-0 transition-opacity pointer-events-none border border-white/5">
+                                                                                <span className="text-[9px] text-[--text-muted] tracking-widest">ENCRYPTED_VALUE</span>
+                                                                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
+                                                                            </div>
+                                                                        )}
+                                                                        {isSaving && (
+                                                                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[--text-muted] font-mono">SAVING</span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </motion.div>
+                                    ) : (
+                                        <motion.div
+                                            key="soul"
+                                            initial={{ opacity: 0, x: 20 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: -20 }}
+                                            transition={{ duration: 0.2 }}
+                                            className="absolute inset-0 overflow-y-auto p-4 custom-scrollbar flex flex-col"
+                                        >
+                                            <div className="p-4 border border-white/10 bg-white/5 mb-4">
+                                                <h3 className="text-white text-xs font-bold mb-1">PERSONA TUNING</h3>
+                                                <p className="text-[10px] text-[--text-muted]">Modify behavioral parameters.</p>
+                                            </div>
+
+                                            <div className="flex-1 relative border border-white/10 bg-black">
+                                                <textarea
+                                                    value={persona}
+                                                    onChange={(e) => setPersona(e.target.value)}
+                                                    className="w-full h-full bg-transparent p-3 font-mono text-[10px] text-[--text-primary] resize-none focus:outline-none custom-scrollbar"
+                                                    placeholder="// Define Agent persona..."
+                                                />
+                                                {/* Decorative Waveform */}
+                                                <div className="absolute bottom-2 right-2 pointer-events-none opacity-50">
+                                                    <svg width="40" height="20" viewBox="0 0 40 20" className="stroke-[--accent-gold] fill-none">
+                                                        <path d="M0 10 Q 5 0, 10 10 T 20 10 T 30 10 T 40 10" className="animate-pulse" />
+                                                    </svg>
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                onClick={() => void savePersona()}
+                                                disabled={personaBusy}
+                                                className="mt-4 w-full py-2 bg-[--accent-gold] text-black font-bold font-display tracking-wider hover:bg-white transition-colors disabled:opacity-50 text-xs"
+                                            >
+                                                {personaBusy ? "UPLOADING..." : "UPLOAD NEW MATRIX"}
+                                            </button>
+                                            {personaStatus && (
+                                                <p className="mt-2 text-[9px] font-mono text-[--status-success] text-center">{personaStatus}</p>
+                                            )}
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
                         </motion.aside>
                     )}
                 </AnimatePresence>
 
-                <button
-                    onClick={() => setLeftPanelOpen(!leftPanelOpen)}
-                    className="absolute left-0 top-1/2 -translate-y-1/2 z-50 w-4 h-12 bg-[--accent-gold] flex items-center justify-center opacity-50 hover:opacity-100 transition-opacity"
-                >
-                    <span className="text-black text-[10px] transform -rotate-90">{leftPanelOpen ? "<" : ">"}</span>
-                </button>
+            </main>
 
-                <section className="flex-1 h-full p-4 relative z-20 flex flex-col gap-4">
-                    <div className="flex-1 relative bg-black/80 border border-[rgba(255,255,255,0.1)] rounded-sm overflow-hidden flex flex-col shadow-2xl">
-                        <div className="h-8 bg-[#1a1a1a] flex items-center px-4 border-b border-[rgba(255,255,255,0.05)]">
-                            <div className="flex gap-2">
-                                <div className="w-2 h-2 rounded-full bg-[--status-error] opacity-50" />
-                                <div className="w-2 h-2 rounded-full bg-[--accent-amber] opacity-50" />
-                                <div className="w-2 h-2 rounded-full bg-[--status-success] opacity-50" />
-                            </div>
-                            <span className="mx-auto text-[10px] font-mono text-[--text-muted]">root@nexus-core:~/logs --watch</span>
+            {/* === BOTTOM DRAWER: LOGS === */}
+            <AnimatePresence>
+                {bottomPanelOpen && (
+                    <motion.div
+                        initial={{ height: 0 }}
+                        animate={{ height: "16rem" }}
+                        exit={{ height: 0 }}
+                        className="flex-none bg-black/95 border-t border-[rgba(255,255,255,0.1)] relative z-50 flex flex-col"
+                    >
+                        {/* Drawer Handle */}
+                        <div
+                            onClick={() => setBottomPanelOpen(false)}
+                            className="h-6 bg-[#1a1a1a] flex items-center justify-between px-4 cursor-pointer hover:bg-[#222]"
+                        >
+                            <span className="text-[10px] font-mono text-[--text-muted]">SYSTEM_EVENT_LOGS --tail -f</span>
+                            <span className="text-[10px] text-[--accent-gold]">▼ CLOSE</span>
                         </div>
 
+                        {/* Logs Content */}
                         <div className="flex-1 p-4 font-mono text-xs overflow-auto custom-scrollbar space-y-1 relative">
                             <div className="absolute inset-0 pointer-events-none bg-[url('/scan-texture.png')] opacity-[0.05] mix-blend-overlay" />
-
                             {logRows.length === 0 && (
-                                <div className="text-[--text-muted] italic opacity-50 text-center mt-20">Waiting for system events...</div>
+                                <div className="text-[--text-muted] italic opacity-50 text-center mt-10">Waiting for system events...</div>
                             )}
-
                             {logRows.map((log, i) => (
                                 <div key={`${log.source}-${i}`} className="flex gap-3 hover:bg-white/5 px-2 py-0.5 rounded transition-colors group">
                                     <span className="text-[--text-muted] shrink-0 font-light text-[10px] w-24">
@@ -1115,168 +1271,34 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                     >
                                         {log.level}
                                     </span>
-                                    <span className="text-[--accent-gold] opacity-80 group-hover:text-white transition-colors">
+                                    <span className="text-[--accent-gold] opacity-80 group-hover:text-white transition-colors break-all">
                                         {log.message}
                                     </span>
                                 </div>
                             ))}
                             <div ref={logEndRef} />
                         </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Collapse Toggle for Bottom Drawer (Status Bar) */}
+            {!bottomPanelOpen && (
+                <footer
+                    onClick={() => setBottomPanelOpen(true)}
+                    className="h-8 bg-black border-t border-[rgba(255,255,255,0.1)] flex items-center justify-between px-4 z-40 relative cursor-pointer hover:bg-white/5 transition-colors"
+                >
+                    <div className="flex items-center gap-4 text-[10px] font-mono text-[--text-muted]">
+                        <span>
+                            STATE: <span className="text-[--status-success] uppercase">{status?.actual_state ?? "unknown"}</span>
+                        </span>
+                        <span>
+                            LOGS: <span className="text-[--accent-gold]">{events.length} EVENTS</span>
+                        </span>
                     </div>
-
-                    <AnimatePresence>
-                        {bottomPanelOpen && (
-                            <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: "auto", opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                className="bg-black/90 border-t border-[--accent-gold] p-6 relative overflow-hidden"
-                            >
-                                <div className="absolute inset-0 bg-gradient-to-t from-[--accent-gold] to-transparent opacity-5 pointer-events-none" />
-
-                                <div className="flex justify-between items-start gap-8">
-                                    <div className="w-1/3">
-                                        <h3 className="text-xl font-display font-bold text-[--accent-gold] mb-2">AGENT&apos;S PERSONA</h3>
-                                        <p className="text-xs text-[--text-muted] font-mono w-64">
-                                            Modify SOUL behavior for this tenant. Updates apply immediately.
-                                        </p>
-                                        <div className="mt-4">
-                                            <button
-                                                onClick={() => {
-                                                    void savePersona();
-                                                }}
-                                                disabled={personaBusy}
-                                                className="px-6 py-2 bg-[--accent-gold] text-black font-bold font-display tracking-wider hover:bg-white transition-colors clip-path-button disabled:opacity-40"
-                                                style={{ clipPath: "polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)" }}
-                                            >
-                                                {personaBusy ? "SAVING..." : "UPLOAD NEW MATRIX"}
-                                            </button>
-                                            {personaStatus && (
-                                                <p className="mt-2 text-[10px] font-mono text-[--status-success]">{personaStatus}</p>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="flex-1 bg-black border border-[rgba(255,255,255,0.1)] p-1 relative">
-                                        <textarea
-                                            value={persona}
-                                            onChange={(e) => setPersona(e.target.value)}
-                                            className="w-full h-32 bg-transparent text-[--accent-gold] font-mono text-xs p-4 focus:outline-none resize-none"
-                                            placeholder="// Enter system prompt..."
-                                        />
-                                        <div className="absolute bottom-2 right-2 flex gap-1">
-                                            <div className="w-1 h-1 bg-[--accent-gold] animate-pulse" />
-                                            <div className="w-1 h-1 bg-[--accent-gold] animate-pulse delay-75" />
-                                            <div className="w-1 h-1 bg-[--accent-gold] animate-pulse delay-150" />
-                                        </div>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </section>
-
-                <AnimatePresence>
-                    {rightPanelOpen && (
-                        <motion.aside
-                            initial={{ x: 300, opacity: 0 }}
-                            animate={{ x: 0, opacity: 1 }}
-                            exit={{ x: 300, opacity: 0 }}
-                            className="absolute right-0 top-0 h-full min-h-0 w-[min(20rem,92vw)] lg:relative lg:w-80 bg-black/80 backdrop-blur-xl border-l border-[rgba(255,255,255,0.1)] z-30 flex flex-col"
-                        >
-                            <div className="p-4 border-b border-[rgba(255,255,255,0.05)]">
-                                <h2 className="font-display font-bold text-[--accent-gold]">SYSTEM_CONFIG</h2>
-                                <div className="h-[1px] w-full bg-gradient-to-r from-[--accent-gold] to-transparent opacity-50 mt-2" />
-                            </div>
-
-                            <div className="flex-1 overflow-auto p-4 space-y-6 custom-scrollbar">
-                                {configManifest.groups.length === 0 && (
-                                    <p className="text-[10px] font-mono text-[--text-muted]">No config loaded.</p>
-                                )}
-                                {configManifest.groups.map((group) => (
-                                    <div key={group.category} className="space-y-3">
-                                        <h3 className="font-mono text-xs text-[--text-secondary] uppercase tracking-widest pl-2 border-l border-[--accent-gold]">
-                                            {group.category}
-                                        </h3>
-                                        <div className="space-y-2">
-                                            {group.items.map((item) => {
-                                                const isSaving = configBusyKey === item.key;
-                                                return (
-                                                    <div key={item.key} className="group/item relative">
-                                                        <label className="block text-[10px] font-mono text-[--text-muted] mb-1">{item.key}</label>
-                                                        <div className="relative">
-                                                            <input
-                                                                type={item.is_secret ? "password" : "text"}
-                                                                value={configValues[item.key] ?? ""}
-                                                                onChange={(e) => {
-                                                                    const next = e.target.value;
-                                                                    setConfigValues((prev) => ({ ...prev, [item.key]: next }));
-                                                                }}
-                                                                onBlur={() => {
-                                                                    void saveConfigValue(item.key);
-                                                                }}
-                                                                disabled={isSaving}
-                                                                className="w-full bg-white/5 border border-white/10 px-3 py-2 font-mono text-xs text-[--accent-gold] focus:border-[--accent-gold] focus:outline-none transition-colors group-hover/item:border-white/20 disabled:opacity-50"
-                                                            />
-                                                            {item.is_secret && (
-                                                                <div className="absolute inset-0 bg-black/90 flex items-center px-3 opacity-100 group-hover/item:opacity-0 transition-opacity pointer-events-none border border-white/5">
-                                                                    <span className="text-[10px] text-[--text-muted] tracking-widest">ENCRYPTED_VALUE</span>
-                                                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
-                                                                </div>
-                                                            )}
-                                                            {isSaving && (
-                                                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[--text-muted] font-mono">
-                                                                    SAVING
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </motion.aside>
-                    )}
-                </AnimatePresence>
-
-                <button
-                    onClick={() => setRightPanelOpen(!rightPanelOpen)}
-                    className="absolute right-0 top-1/2 -translate-y-1/2 z-50 w-4 h-12 bg-[--accent-gold] flex items-center justify-center opacity-50 hover:opacity-100 transition-opacity"
-                >
-                    <span className="text-black text-[10px] transform -rotate-90">{rightPanelOpen ? ">" : "<"}</span>
-                </button>
-            </main>
-
-            <footer className="h-8 bg-black border-t border-[rgba(255,255,255,0.1)] flex items-center justify-between px-4 z-40 relative">
-                <div className="flex items-center gap-4 text-[10px] font-mono text-[--text-muted]">
-                    <span>
-                        STATE: <span className="text-[--status-success] uppercase">{status?.actual_state ?? "unknown"}</span>
-                    </span>
-                    <span>
-                        LINK: <span className="text-[--accent-gold]">{whatsappLinkState.toUpperCase()}</span>
-                    </span>
-                    <span>
-                        HEARTBEAT: <span className="text-[--status-success]">{status?.last_heartbeat ? "ACTIVE" : "--"}</span>
-                    </span>
-                </div>
-
-                <button
-                    onClick={() => setBottomPanelOpen(!bottomPanelOpen)}
-                    className={`h-full px-6 flex items-center gap-2 border-l border-r border-[rgba(255,255,255,0.1)] hover:bg-white/5 transition-colors ${bottomPanelOpen
-                        ? "bg-[--accent-gold] text-black border-[--accent-gold]"
-                        : "text-[--accent-gold]"
-                        }`}
-                >
-                    <span className="text-[10px] font-display font-bold tracking-widest">
-                        {bottomPanelOpen ? "CLOSE TUNING" : "PERSONA TUNING"}
-                    </span>
-                    <div
-                        className={`w-2 h-2 border-t border-r border-current transform transition-transform ${bottomPanelOpen ? "rotate-[-45deg] mt-1" : "rotate-[135deg] mb-1"
-                            }`}
-                    />
-                </button>
-            </footer>
+                    <span className="text-[10px] font-display font-bold tracking-widest text-[--accent-gold]">▲ OPEN CONSOLE</span>
+                </footer>
+            )}
 
             <AnimatePresence>
                 {error && (
@@ -1284,9 +1306,10 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 10 }}
-                        className="absolute bottom-12 left-1/2 -translate-x-1/2 z-50 px-4 py-2 border border-[--status-error] text-[--status-error] bg-black/90 font-mono text-xs max-w-[70%] text-center"
+                        className="absolute bottom-20 left-1/2 -translate-x-1/2 z-[60] px-4 py-2 border border-[--status-error] text-[--status-error] bg-black/90 font-mono text-xs max-w-[70%] text-center shadow-lg backdrop-blur-md"
                     >
                         {error}
+                        <button onClick={() => setError("")} className="ml-4 underline opacity-50 hover:opacity-100">DISMISS</button>
                     </motion.div>
                 )}
             </AnimatePresence>
