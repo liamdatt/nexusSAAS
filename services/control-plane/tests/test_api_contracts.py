@@ -4,6 +4,7 @@ import asyncio
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_control_plane_contracts.db"
 os.environ["CONTROL_AUTO_CREATE_SCHEMA"] = "true"
@@ -493,6 +494,9 @@ def test_google_connect_start_returns_auth_url(client: TestClient) -> None:
     assert body["expires_in_seconds"] > 0
     assert "https://accounts.google.com/o/oauth2/v2/auth" in body["auth_url"]
     assert "state=" in body["auth_url"]
+    scope = parse_qs(urlparse(body["auth_url"]).query).get("scope", [""])[0].split()
+    assert "https://www.googleapis.com/auth/documents" in scope
+    assert "https://www.googleapis.com/auth/documents.readonly" not in scope
 
 
 def test_google_callback_persists_token_and_syncs_runner(client: TestClient, monkeypatch) -> None:

@@ -88,8 +88,8 @@ Use native Nexus Google tools, not shell commands.
 - `calendar`: Event listing, creation, updates, and color lookup.
 - `drive`: Drive search and file discovery.
 - `contacts`: Contact listing and lookup.
-- `sheets`: Read/update/append/clear/metadata operations.
-- `docs`: Read/export document content.
+- `sheets`: Create spreadsheets plus read/update/append/clear/metadata operations.
+- `docs`: Read/export plus create/append/replace document content.
 
 ## Operating Rules
 - Prefer read actions first to gather context.
