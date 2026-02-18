@@ -21,7 +21,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "NEXUS | CONTROL",
+  title: "NEXUS SOVEREIGN",
   description: "Advanced Agentic Interface",
 };
 

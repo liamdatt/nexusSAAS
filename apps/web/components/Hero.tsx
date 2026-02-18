@@ -1,236 +1,224 @@
 "use client";
 
-import React from 'react';
-import { motion } from 'framer-motion';
+import React, { useEffect, useState, useRef } from 'react';
+import { motion, useScroll, useTransform, useMotionValue, useSpring } from 'framer-motion';
 import Orb from './ui/Orb';
 
 export default function Hero() {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const { scrollY } = useScroll();
+
+    // Parallax transforms
+    const y1 = useTransform(scrollY, [0, 500], [0, 200]);
+    const y2 = useTransform(scrollY, [0, 500], [0, -150]);
+    const scale = useTransform(scrollY, [0, 500], [1, 1.5]);
+    const opacity = useTransform(scrollY, [0, 300], [1, 0]);
+
+    // Mouse movement parallax
+    const mouseX = useMotionValue(0);
+    const mouseY = useMotionValue(0);
+    const springX = useSpring(mouseX, { stiffness: 50, damping: 20 });
+    const springY = useSpring(mouseY, { stiffness: 50, damping: 20 });
+
+    function handleMouseMove(e: React.MouseEvent) {
+        const { clientX, clientY } = e;
+        const { innerWidth, innerHeight } = window;
+        const x = (clientX / innerWidth - 0.5) * 40; // range -20 to 20
+        const y = (clientY / innerHeight - 0.5) * 40;
+        mouseX.set(x);
+        mouseY.set(y);
+    }
+
+    // Hold-to-initialize Logic
+    const [holding, setHolding] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [initialized, setInitialized] = useState(false);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+    const startHold = () => {
+        if (initialized) return;
+        setHolding(true);
+        intervalRef.current = setInterval(() => {
+            setProgress(prev => {
+                if (prev >= 100) {
+                    if (intervalRef.current) clearInterval(intervalRef.current);
+                    setInitialized(true);
+                    // Trigger scroll after delay
+                    setTimeout(() => {
+                        document.getElementById('auth-terminal')?.scrollIntoView({ behavior: 'smooth' });
+                    }, 800);
+                    return 100;
+                }
+                return prev + 2; // Speed of fill
+            });
+        }, 30);
+    };
+
+    const stopHold = () => {
+        if (initialized) return;
+        setHolding(false);
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+        setProgress(0);
+    };
+
     return (
-        <section className="relative z-10 flex flex-col items-center justify-center min-h-screen text-center px-4 py-20 overflow-hidden">
+        <section
+            ref={containerRef}
+            onMouseMove={handleMouseMove}
+            className="relative h-screen w-full flex items-center justify-center overflow-hidden perspective-1000"
+        >
+            {/* === BACKGROUND LAYERS === */}
 
-            {/* === MAIN HERO LAYOUT === */}
-            <div className="relative flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-0 w-full max-w-7xl">
-
-                {/* --- LEFT FLOATING ELEMENT: QR Data Slate --- */}
-                <motion.div
-                    initial={{ opacity: 0, x: -60, rotateY: 15 }}
-                    animate={{ opacity: 1, x: 0, rotateY: 0 }}
-                    transition={{ duration: 1.2, delay: 0.6, ease: "easeOut" }}
-                    className="hidden lg:block flex-shrink-0 w-64"
-                    style={{ animation: 'float-gentle 6s ease-in-out infinite' }}
-                >
-                    <div className="glass-panel-deep rim-light rounded-2xl p-6 border border-[rgba(255,215,0,0.1)] relative overflow-hidden">
-                        {/* Scan lines overlay */}
-                        <div className="absolute inset-0 opacity-5 pointer-events-none"
-                            style={{
-                                backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,215,0,0.1) 2px, rgba(255,215,0,0.1) 4px)',
-                                backgroundSize: '100% 4px'
-                            }}
-                        />
-                        <p className="text-[--accent-gold] text-[10px] font-mono tracking-[0.3em] uppercase mb-4 text-center">
-                            STEP 1: SCAN TO AUTHENTICATE
-                        </p>
-                        {/* Decorative QR Placeholder */}
-                        <div className="relative mx-auto w-36 h-36 flex items-center justify-center">
-                            <div className="absolute inset-0 bg-gradient-to-br from-[--accent-gold] to-[--accent-orange] opacity-10 rounded-lg" />
-                            <div className="relative w-32 h-32 grid grid-cols-8 grid-rows-8 gap-[2px] p-2">
-                                {Array.from({ length: 64 }).map((_, i) => (
-                                    <div
-                                        key={i}
-                                        className="rounded-[1px]"
-                                        style={{
-                                            backgroundColor: Math.random() > 0.4
-                                                ? `rgba(255, 215, 0, ${0.4 + Math.random() * 0.6})`
-                                                : 'transparent',
-                                        }}
-                                    />
-                                ))}
-                            </div>
-                            {/* Glow rays */}
-                            <div className="absolute inset-0 rounded-lg shadow-[0_0_40px_rgba(255,215,0,0.15)] pointer-events-none" />
-                        </div>
-                        <p className="text-[--text-muted] text-[9px] font-mono text-center mt-4 tracking-wider">
-                            QUANTUM-ENCRYPTED LINK
-                        </p>
-                    </div>
-                </motion.div>
-
-                {/* --- CENTER: Reactor Core + Typography --- */}
-                <div className="flex-1 flex flex-col items-center max-w-2xl lg:px-8">
-                    {/* Reactor Core — Orb + Sacred Geometry Rings */}
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.5 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ duration: 1.5, ease: "easeOut" }}
-                        className="relative w-56 h-56 md:w-72 md:h-72 mb-10"
-                    >
-                        {/* Ambient glow behind orb */}
-                        <div className="absolute inset-[-30%] rounded-full bg-gradient-to-r from-[--accent-gold] to-[--accent-orange] opacity-[0.06] blur-3xl" />
-
-                        {/* Sacred geometry ring 1 — outer */}
-                        <div
-                            className="absolute inset-[-15%] border border-[rgba(255,215,0,0.12)] rounded-full"
-                            style={{ animation: 'ring-rotate 30s linear infinite' }}
-                        >
-                            {/* Nodes on ring */}
-                            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-[--accent-gold] rounded-full opacity-60 shadow-[0_0_8px_var(--accent-gold)]" />
-                            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1.5 h-1.5 bg-[--accent-orange] rounded-full opacity-40 shadow-[0_0_6px_var(--accent-orange)]" />
-                        </div>
-
-                        {/* Sacred geometry ring 2 — mid */}
-                        <div
-                            className="absolute inset-[-5%] border border-[rgba(255,215,0,0.08)] rounded-full"
-                            style={{ animation: 'ring-rotate-reverse 20s linear infinite' }}
-                        >
-                            <div className="absolute top-1/2 right-0 translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-[--accent-amber] rounded-full opacity-50 shadow-[0_0_6px_var(--accent-amber)]" />
-                        </div>
-
-                        {/* The Orb itself */}
-                        <div className="absolute inset-[5%] rounded-full overflow-hidden">
-                            <Orb
-                                hue={40}
-                                hoverIntensity={0.3}
-                                rotateOnHover={true}
-                                forceHoverState={false}
-                                backgroundColor="#050505"
-                            />
-                        </div>
-                    </motion.div>
-
-                    {/* Headline */}
-                    <motion.h1
-                        initial={{ opacity: 0, y: 30 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.8, delay: 0.3, ease: "easeOut" }}
-                        className="text-5xl md:text-7xl lg:text-8xl font-bold tracking-wider mb-5 font-display leading-none"
-                    >
-                        <span className="text-white text-shadow-glow">COMMAND</span>
-                        <br />
-                        <span className="text-white text-shadow-glow">YOUR </span>
-                        <span className="text-gradient-gold">NEXUS</span>
-                    </motion.h1>
-
-                    {/* Sub-headline */}
-                    <motion.p
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: 0.6, duration: 0.8 }}
-                        className="text-[--text-secondary] text-sm md:text-base font-mono tracking-[0.15em] max-w-xl leading-relaxed"
-                    >
-                        INTELLIGENT AGENTIC ASSISTANCE<br />
-                        DEPLOYED VIA WHATSAPP · POWERED BY FLOPRO
-                    </motion.p>
-
-                    {/* CTA Button — Ignition Switch */}
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ delay: 1.0, duration: 0.5 }}
-                        className="mt-10"
-                    >
-                        <button
-                            onClick={() => document.getElementById('login-form')?.scrollIntoView({ behavior: 'smooth' })}
-                            className="group relative px-10 py-5 overflow-hidden border-0 cursor-pointer"
-                            style={{
-                                clipPath: 'polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px)',
-                                background: 'linear-gradient(135deg, rgba(255,215,0,0.15), rgba(255,69,0,0.1))',
-                            }}
-                        >
-                            {/* Glow behind button */}
-                            <div className="absolute inset-0 bg-gradient-to-r from-[--accent-gold] to-[--accent-orange] opacity-0 group-hover:opacity-20 transition-opacity duration-500" />
-                            {/* Border line */}
-                            <div className="absolute inset-0 border border-[--accent-gold] opacity-60 group-hover:opacity-100 transition-opacity"
-                                style={{ clipPath: 'polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px)' }}
-                            />
-                            {/* Shimmer sweep */}
-                            <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-[rgba(255,215,0,0.1)] to-transparent" />
-                            <span className="relative text-[--accent-gold] font-display font-bold tracking-[0.25em] text-sm md:text-base group-hover:text-white transition-colors duration-300">
-                                INITIALIZE SEQUENCE
-                            </span>
-                        </button>
-                    </motion.div>
-                </div>
-
-                {/* --- RIGHT FLOATING ELEMENT: WhatsApp Phone Mockup --- */}
-                <motion.div
-                    initial={{ opacity: 0, x: 60, rotateY: -15 }}
-                    animate={{ opacity: 1, x: 0, rotateY: 0 }}
-                    transition={{ duration: 1.2, delay: 0.8, ease: "easeOut" }}
-                    className="hidden lg:block flex-shrink-0 w-56"
-                    style={{ animation: 'float-gentle-alt 7s ease-in-out infinite' }}
-                >
-                    <div className="glass-panel-deep rim-light rounded-[28px] p-2 border border-[rgba(255,255,255,0.06)] relative overflow-hidden">
-                        {/* Phone bezel/notch */}
-                        <div className="relative rounded-[22px] overflow-hidden carbon-fiber" style={{ background: 'linear-gradient(to bottom, #0a0a0a, #080808)' }}>
-                            {/* Status bar */}
-                            <div className="flex justify-between items-center px-4 py-2 text-[8px] font-mono text-[--text-muted]">
-                                <span>12:42</span>
-                                <div className="w-16 h-4 bg-black rounded-full mx-auto" />
-                                <span>5G ▓▓▓</span>
-                            </div>
-                            {/* WhatsApp Header */}
-                            <div className="flex items-center gap-2 px-3 py-2 border-b border-[rgba(255,255,255,0.04)]">
-                                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[--accent-gold] to-[--accent-orange] flex items-center justify-center text-black text-[8px] font-bold">N</div>
-                                <div>
-                                    <div className="flex items-center gap-1">
-                                        <span className="text-white text-[10px] font-medium">Nexus Agent</span>
-                                        <span className="text-[--accent-gold] text-[8px]">✓</span>
-                                    </div>
-                                    <span className="text-[--status-success] text-[7px] font-mono">ONLINE</span>
-                                </div>
-                            </div>
-                            {/* Chat messages */}
-                            <div className="p-3 space-y-2 min-h-[180px]">
-                                {/* User message */}
-                                <div className="flex justify-end">
-                                    <div className="bg-[rgba(255,255,255,0.06)] rounded-lg rounded-tr-sm px-3 py-2 max-w-[85%]">
-                                        <p className="text-[9px] text-[--text-secondary] leading-relaxed">Initialize systems</p>
-                                        <p className="text-[7px] text-[--text-muted] text-right mt-1">12:41</p>
-                                    </div>
-                                </div>
-                                {/* Agent message — glowing golden */}
-                                <div className="flex justify-start">
-                                    <div className="rounded-lg rounded-tl-sm px-3 py-2 max-w-[90%] border border-[rgba(255,215,0,0.15)]"
-                                        style={{ background: 'linear-gradient(135deg, rgba(255,215,0,0.08), rgba(255,69,0,0.04))' }}
-                                    >
-                                        <p className="text-[9px] text-[--accent-gold] leading-relaxed font-mono">
-                                            Nexus Online. Systems synchronized. What is your first directive?
-                                        </p>
-                                        <p className="text-[7px] text-[--accent-amber] text-right mt-1 opacity-60">12:42</p>
-                                    </div>
-                                </div>
-                                {/* Typing indicator */}
-                                <div className="flex items-center gap-1 px-2 py-1">
-                                    <div className="w-1 h-1 rounded-full bg-[--accent-gold] opacity-60 animate-pulse" />
-                                    <div className="w-1 h-1 rounded-full bg-[--accent-gold] opacity-40 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                                    <div className="w-1 h-1 rounded-full bg-[--accent-gold] opacity-20 animate-pulse" style={{ animationDelay: '0.4s' }} />
-                                </div>
-                            </div>
-                            {/* Input bar */}
-                            <div className="flex items-center gap-2 px-3 py-2 border-t border-[rgba(255,255,255,0.04)]">
-                                <div className="flex-1 bg-[rgba(255,255,255,0.03)] rounded-full px-3 py-1.5">
-                                    <span className="text-[8px] text-[--text-muted] font-mono">Enter directive...</span>
-                                </div>
-                                <div className="w-6 h-6 rounded-full bg-[--accent-gold] flex items-center justify-center opacity-80">
-                                    <span className="text-black text-[10px]">▸</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
-
-            </div>
-
-            {/* Scroll indicator */}
+            {/* Layer 0: The Orb (Massive Scale) */}
             <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 0.4 }}
-                transition={{ delay: 2 }}
-                className="absolute bottom-8 left-1/2 -translate-x-1/2"
+                style={{ y: y1, x: springX, scale: scale }}
+                className="absolute z-10 w-[80vw] h-[80vw] md:w-[60vh] md:h-[60vh] sphere-pulse pointer-events-none"
             >
-                <div className="flex flex-col items-center gap-2">
-                    <span className="text-[--text-muted] text-[8px] font-mono tracking-[0.3em] uppercase">SCROLL</span>
-                    <div className="w-px h-8 bg-gradient-to-b from-[--accent-gold] to-transparent opacity-40" />
+                <div className="w-full h-full rounded-full overflow-hidden shadow-[0_0_100px_rgba(255,215,0,0.2)]">
+                    <Orb
+                        hue={40}
+                        hoverIntensity={0.6}
+                        rotateOnHover={true}
+                        forceHoverState={true}
+                        backgroundColor="transparent"
+                    />
+                </div>
+                {/* Orbital Rings - SVG Overlay */}
+                <svg className="absolute inset-[-50%] w-[200%] h-[200%] animate-spin-slow pointer-events-none opacity-40" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="45" fill="none" stroke="#FFD700" strokeWidth="0.1" strokeDasharray="1 3" />
+                    <circle cx="50" cy="50" r="35" fill="none" stroke="#FF4500" strokeWidth="0.2" strokeDasharray="10 20" opacity="0.5" />
+                </svg>
+            </motion.div>
+
+
+            {/* === TYPOGRAPHY LAYERS === */}
+
+            {/* Layer 1: "NEXUS" Outline (Behind Orb) */}
+            <motion.div
+                style={{ y: y2, x: useTransform(springX, val => val * -0.5), opacity }}
+                className="absolute z-0 flex items-center justify-center w-full pointer-events-none"
+            >
+                <h1 className="text-massive text-stroke-gold opacity-20 select-none blur-sm">
+                    NEXUS
+                </h1>
+            </motion.div>
+
+            {/* Layer 2: "COMMAND" Solid (Front of Orb) */}
+            <motion.div
+                style={{ y: y2, x: useTransform(springX, val => val * 1.5), opacity }}
+                className="absolute z-20 top-[60%] md:top-[55%] pointer-events-none mix-blend-overlay"
+            >
+                <h1 className="text-[12vw] leading-none font-black tracking-tighter text-white select-none text-glow uppercase">
+                    COMMAND
+                </h1>
+            </motion.div>
+
+
+            {/* === FLOATING SATELLITES (HUD ELEMENTS) === */}
+
+            {/* Left Satellite: QR Code */}
+            <motion.div
+                initial={{ x: -100, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ duration: 1.5, delay: 0.5 }}
+                style={{ x: useTransform(springX, val => val * 2), y: useTransform(springY, val => val * 2) }}
+                className="hidden lg:block absolute left-[10%] top-[30%] z-20"
+            >
+                <div className="hud-panel p-4 w-48 backdrop-blur-md">
+                    <div className="flex justify-between items-center mb-2 border-b border-[rgba(255,215,0,0.3)] pb-1">
+                        <span className="text-[10px] font-mono text-[--accent-gold]">UPLINK_01</span>
+                        <div className="w-2 h-2 bg-[--status-success] rounded-full animate-pulse" />
+                    </div>
+                    <div className="w-full aspect-square border-2 border-dashed border-[rgba(255,255,255,0.1)] flex items-center justify-center relative bg-black/50">
+                        <div className="absolute inset-0 grid grid-cols-4 gap-0.5 opacity-30">
+                            {[...Array(16)].map((_, i) => (
+                                <div key={i} className="bg-[--accent-gold]" style={{ opacity: Math.random() }} />
+                            ))}
+                        </div>
+                        <span className="text-[8px] font-mono text-center relative z-10 text-[--accent-gold] bg-black/80 px-1">
+                            AWAITING LINK
+                        </span>
+                    </div>
+                </div>
+                {/* Connecting Line to Center */}
+                <div className="absolute top-1/2 right-[-100px] w-[100px] h-[1px] bg-gradient-to-r from-[--accent-gold] to-transparent opacity-30" />
+            </motion.div>
+
+            {/* Right Satellite: Phone Mockup */}
+            <motion.div
+                initial={{ x: 100, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ duration: 1.5, delay: 0.8 }}
+                style={{ x: useTransform(springX, val => val * 2), y: useTransform(springY, val => val * 2) }}
+                className="hidden lg:block absolute right-[12%] bottom-[30%] z-20"
+            >
+                <div className="hud-panel p-4 w-56 backdrop-blur-md transform rotate-[-5deg]">
+                    <div className="flex items-center gap-3 mb-2">
+                        <div className="w-8 h-8 rounded-full bg-[--accent-gold] flex items-center justify-center text-black font-bold text-xs">N</div>
+                        <div className="flex-1">
+                            <div className="h-2 w-12 bg-white/20 rounded mb-1" />
+                            <div className="h-1.5 w-20 bg-white/10 rounded" />
+                        </div>
+                    </div>
+                    <div className="space-y-2 font-mono text-[9px] text-[--accent-gold]">
+                        <div className="bg-white/5 p-2 border-l border-[--accent-gold]">
+                            &gt; INITIALIZING PROTOCOLS...
+                        </div>
+                        <div className="bg-white/5 p-2 border-l border-[--accent-gold] opacity-60">
+                            &gt; SYNCING NEURAL NET...
+                        </div>
+                    </div>
+                </div>
+                {/* Connecting Line */}
+                <div className="absolute top-1/2 left-[-80px] w-[80px] h-[1px] bg-gradient-to-l from-[--accent-gold] to-transparent opacity-30" />
+            </motion.div>
+
+
+            {/* === INTERACTION LAYER (Hold to Initialize) === */}
+            <motion.div
+                className="absolute bottom-20 z-30 flex flex-col items-center gap-4"
+                style={{ opacity }}
+            >
+                <div
+                    className="relative group cursor-pointer"
+                    onMouseDown={startHold}
+                    onMouseUp={stopHold}
+                    onMouseLeave={stopHold}
+                    onTouchStart={startHold}
+                    onTouchEnd={stopHold}
+                >
+                    {/* The Trigger Button */}
+                    <div className="relative overflow-hidden w-64 h-16 border border-[rgba(255,215,0,0.3)] bg-[rgba(0,0,0,0.6)] backdrop-blur-sm flex items-center justify-center transition-all duration-300 group-hover:border-[--accent-gold] group-hover:shadow-[0_0_30px_rgba(255,215,0,0.2)]">
+                        {/* Progress Fill */}
+                        <motion.div
+                            className="absolute left-0 top-0 bottom-0 bg-[--accent-gold] z-0"
+                            style={{ width: `${progress}%` }}
+                        />
+
+                        {/* Scan Line Animation inside button */}
+                        <div className="absolute inset-0 bg-[url('/scan-texture.png')] opacity-10 mix-blend-overlay z-10" />
+
+                        {/* Text Content */}
+                        <span className={`relative z-20 font-display font-bold tracking-[0.2em] transition-colors duration-200 ${progress > 50 ? 'text-black' : 'text-[--accent-gold]'}`}>
+                            {initialized ? "ACCESS GRANTED" : holding ? "HOLDING..." : "INITIALIZE"}
+                        </span>
+
+                        {/* Corner Accents */}
+                        <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-[--status-success]" />
+                        <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-[--status-success]" />
+                    </div>
+
+                    {/* Instructional Text */}
+                    <motion.p
+                        initial={{ opacity: 0.6 }}
+                        animate={{ opacity: holding ? 1 : 0.6 }}
+                        className="text-[10px] font-mono text-[--text-muted] text-center mt-2 tracking-widest uppercase"
+                    >
+                        {initialized ? "SYSTEMS ONLINE" : "HOLD TO DEPLOY AGENT"}
+                    </motion.p>
                 </div>
             </motion.div>
 

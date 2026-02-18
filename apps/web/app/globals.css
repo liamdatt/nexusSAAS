@@ -1,21 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  /* Core Palette */
-  --bg-obsidian: #050505;
-  --bg-charcoal: #0a0a0a;
-  --bg-card: rgba(20, 20, 20, 0.6);
-  --glass-border: rgba(255, 255, 255, 0.08);
+  /* Core Palette — darker, deeper, more cinematic */
+  --bg-obsidian: #030303;
+  --bg-void: #000000;
+  --bg-card: rgba(10, 10, 10, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.04);
 
-  /* Accents */
+  /* Accents — Molten Core */
   --accent-gold: #FFD700;
+  --accent-amber: #FFB800;
   --accent-orange: #FF4500;
-  --accent-amber: #FFBF00;
+  --accent-plasma: #FF3300;
 
   /* Text */
   --text-primary: #F0F0F0;
-  --text-secondary: #A0A0A0;
-  --text-muted: #505050;
+  --text-secondary: #808080;
+  --text-muted: #404040;
 
   /* Status */
   --status-success: #00FF94;
@@ -34,35 +35,66 @@
   --font-sans: var(--font-sans);
 
   --color-obsidian: var(--bg-obsidian);
-  --color-charcoal: var(--bg-charcoal);
-  --color-card-bg: var(--bg-card);
-  --color-glass-border: var(--glass-border);
-
+  --color-void: var(--bg-void);
   --color-gold: var(--accent-gold);
-  --color-orange: var(--accent-orange);
   --color-amber: var(--accent-amber);
+  --color-plasma: var(--accent-plasma);
 
-  --animate-pulse-glow: pulse-glow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  --animate-spin-slow: spin 20s linear infinite;
-  --animate-spin-reverse: spin 25s linear infinite reverse;
+  /* Cinematic Animations */
+  --animate-float-slow: float-slow 8s ease-in-out infinite;
+  --animate-float-reverse: float-reverse 9s ease-in-out infinite;
+  --animate-pulse-slow: pulse-slow 4s ease-in-out infinite;
+  --animate-scan-line: scan-line 3s linear infinite;
 
-  @keyframes pulse-glow {
+  @keyframes float-slow {
+
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-20px);
+    }
+  }
+
+  @keyframes float-reverse {
+
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(20px);
+    }
+  }
+
+  @keyframes pulse-slow {
 
     0%,
     100% {
       opacity: 0.8;
-      box-shadow: 0 0 15px var(--accent-gold);
     }
 
     50% {
       opacity: 0.4;
-      box-shadow: 0 0 5px var(--accent-orange);
+    }
+  }
+
+  @keyframes scan-line {
+    0% {
+      transform: translateY(-100%);
+    }
+
+    100% {
+      transform: translateY(100vh);
     }
   }
 }
 
 body {
-  background-color: var(--bg-obsidian);
+  background-color: var(--bg-void);
   color: var(--text-primary);
   font-family: var(--font-sans);
   overflow-x: hidden;
@@ -70,184 +102,96 @@ body {
 }
 
 /* ========================================
+   CINEMATIC UTILS
+   ======================================== */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.text-massive {
+  font-size: 15vw;
+  line-height: 0.8;
+  letter-spacing: -0.05em;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.text-stroke-gold {
+  -webkit-text-stroke: 1px rgba(255, 215, 0, 0.4);
+  color: transparent;
+}
+
+.text-glow {
+  text-shadow: 0 0 30px rgba(255, 215, 0, 0.3);
+}
+
+/* ========================================
+   HUD ELEMENTS
+   ======================================== */
+.hud-panel {
+  background: rgba(10, 10, 10, 0.6);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  clip-path: polygon(0 0,
+      100% 0,
+      100% calc(100% - 20px),
+      calc(100% - 20px) 100%,
+      0 100%);
+}
+
+.hud-line {
+  height: 1px;
+  background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(255, 215, 0, 0.3) 20%,
+      rgba(255, 215, 0, 0.3) 80%,
+      transparent 100%);
+}
+
+/* ========================================
+   TERMINAL INPUT
+   ======================================== */
+.input-terminal {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+  color: var(--accent-gold);
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  width: 100%;
+  transition: all 0.3s ease;
+}
+
+.input-terminal:focus {
+  border-bottom-color: var(--accent-gold);
+  outline: none;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+}
+
+/* ========================================
+   FOG LAYER
+   ======================================== */
+.fog-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.8) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.4) 0%, transparent 20%, transparent 80%, rgba(0, 0, 0, 0.4) 100%);
+  z-index: 5;
+}
+
+/* ========================================
    SCROLLBAR
    ======================================== */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 2px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: #000;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--text-muted);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
   background: var(--accent-gold);
-}
-
-/* ========================================
-   GLASSMORPHISM — "thick, beveled smoked glass"
-   ======================================== */
-.glass-panel {
-  background: linear-gradient(135deg,
-      rgba(20, 20, 20, 0.7) 0%,
-      rgba(10, 10, 10, 0.5) 100%);
-  backdrop-filter: blur(20px) saturate(1.5);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow:
-    0 4px 30px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
-}
-
-.glass-panel-deep {
-  background: linear-gradient(135deg,
-      rgba(15, 15, 15, 0.85) 0%,
-      rgba(5, 5, 5, 0.7) 100%);
-  backdrop-filter: blur(30px) saturate(1.8);
-  -webkit-backdrop-filter: blur(30px) saturate(1.8);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  box-shadow:
-    0 8px 40px rgba(0, 0, 0, 0.8),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    inset 0 -2px 0 rgba(0, 0, 0, 0.5);
-}
-
-/* ========================================
-   RIM LIGHTING — dramatic chiaroscuro edges
-   ======================================== */
-.rim-light {
-  box-shadow:
-    0 0 1px rgba(255, 215, 0, 0.15),
-    0 0 15px rgba(255, 215, 0, 0.05),
-    inset 0 1px 0 rgba(255, 215, 0, 0.08);
-  transition: box-shadow 0.4s ease;
-}
-
-.rim-light:hover {
-  box-shadow:
-    0 0 2px rgba(255, 215, 0, 0.25),
-    0 0 25px rgba(255, 215, 0, 0.1),
-    inset 0 1px 0 rgba(255, 215, 0, 0.12);
-}
-
-/* ========================================
-   TEXTURES — Carbon Fiber + Hex Mesh
-   ======================================== */
-.hex-mesh {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='49' viewBox='0 0 28 49'%3E%3Cg fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.02'%3E%3Cpath d='M13.99 9.25l13 7.5v15l-13 7.5L1 31.75v-15l12.99-7.5zM3 17.9v12.7l10.99 6.34 11-6.35V17.9l-11-6.34L3 17.9zM0 15l12.98-7.5V0h-2v6.35L0 12.69v2.3zm0 18.5L12.98 41v8h-2v-6.85L0 35.81v-2.3zM15 0v7.5L27.99 15H28v-2.31h-.01L17 6.35V0h-2zm0 49v-8l12.99-7.5H28v2.31h-.01L17 42.15V49h-2z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-}
-
-.carbon-fiber {
-  background-image:
-    repeating-linear-gradient(0deg,
-      rgba(255, 255, 255, 0.015) 0px,
-      rgba(255, 255, 255, 0.015) 1px,
-      transparent 1px,
-      transparent 3px),
-    repeating-linear-gradient(90deg,
-      rgba(255, 255, 255, 0.015) 0px,
-      rgba(255, 255, 255, 0.015) 1px,
-      transparent 1px,
-      transparent 3px);
-  background-size: 3px 3px;
-}
-
-/* ========================================
-   GRADIENT TEXT
-   ======================================== */
-.text-gradient-gold {
-  background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* ========================================
-   TEXT SHADOW GLOW
-   ======================================== */
-.text-shadow-glow {
-  text-shadow:
-    0 0 20px rgba(255, 215, 0, 0.3),
-    0 0 40px rgba(255, 215, 0, 0.1);
-}
-
-/* ========================================
-   BORDER GLOW
-   ======================================== */
-.border-glow {
-  box-shadow: 0 0 10px rgba(255, 215, 0, 0.1);
-  transition: box-shadow 0.3s ease;
-}
-
-.border-glow:hover {
-  box-shadow: 0 0 20px rgba(255, 215, 0, 0.3);
-}
-
-/* ========================================
-   SACRED GEOMETRY RINGS (for Orb surround)
-   ======================================== */
-@keyframes ring-rotate {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes ring-rotate-reverse {
-  from {
-    transform: rotate(360deg);
-  }
-
-  to {
-    transform: rotate(0deg);
-  }
-}
-
-@keyframes float-gentle {
-
-  0%,
-  100% {
-    transform: translateY(0px) rotate(-6deg);
-  }
-
-  50% {
-    transform: translateY(-12px) rotate(-4deg);
-  }
-}
-
-@keyframes float-gentle-alt {
-
-  0%,
-  100% {
-    transform: translateY(0px) rotate(4deg);
-  }
-
-  50% {
-    transform: translateY(-10px) rotate(6deg);
-  }
-}
-
-/* ========================================
-   VIGNETTE OVERLAYS
-   ======================================== */
-.vignette-heavy {
-  background: radial-gradient(ellipse at center,
-      transparent 30%,
-      rgba(0, 0, 0, 0.7) 100%);
-}
-
-.vignette-subtle {
-  background: radial-gradient(ellipse at center,
-      transparent 50%,
-      rgba(0, 0, 0, 0.4) 100%);
 }

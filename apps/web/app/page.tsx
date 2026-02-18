@@ -71,50 +71,63 @@ export default function Home() {
   if (!isClient) return null;
 
   return (
-    <main className="relative min-h-screen w-full overflow-hidden bg-[--bg-obsidian] text-[--text-primary] selection:bg-[--accent-gold] selection:text-black">
+    <main className="relative min-h-screen w-full overflow-hidden bg-[--bg-obsidian] selection:bg-[--accent-gold] selection:text-black">
 
-      {/* === LAYER 0: Deep Background — Particles (subtle, distant) === */}
-      <div className="fixed inset-0 z-0">
+      {/* === LAYER 0: The Void (Deep Background) === */}
+      <div className="fixed inset-0 z-0 bg-gradient-to-b from-[#000] via-[#050505] to-[#0a0a0a]" />
+
+      {/* === LAYER 1: Deep Particles and Aurora === */}
+      <div className="fixed inset-0 z-[1] opacity-30">
         <Particles
-          particleCount={200}
-          particleSpread={12}
-          speed={0.05}
+          particleCount={150}
+          particleSpread={20}
+          speed={0.08}
           particleColors={["#FFD700", "#FF4500", "#ffffff"]}
           moveParticlesOnHover={true}
-          particleHoverFactor={0.5}
+          particleHoverFactor={0.8}
           alphaParticles={true}
-          particleBaseSize={60}
-          sizeRandomness={1.2}
-          cameraDistance={25}
+          particleBaseSize={80}
+          sizeRandomness={1.5}
+          cameraDistance={30}
           disableRotation={false}
         />
       </div>
-
-      {/* === LAYER 1: Aurora atmospheric glow === */}
-      <div className="fixed inset-0 z-[1] opacity-30 pointer-events-none">
+      <div className="fixed inset-0 z-[1] opacity-20 pointer-events-none mix-blend-screen">
         <Aurora
-          colorStops={["#FFD700", "#FF4500", "#FFD700"]}
-          amplitude={1.2}
-          blend={0.6}
-          speed={0.5}
+          colorStops={["#FFD700", "#FF4500", "#000000"]}
+          amplitude={1.5}
+          blend={0.5}
+          speed={0.3}
         />
       </div>
 
-      {/* === LAYER 2: Hex mesh texture overlay === */}
-      <div className="fixed inset-0 z-[2] hex-mesh pointer-events-none" />
+      {/* === LAYER 2: Atmos — Fog and Noise === */}
+      <div className="fog-layer z-[2]" />
+      <div className="fixed inset-0 z-[2] opacity-[0.03] pointer-events-none"
+        style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 200 200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.65\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }}
+      />
 
-      {/* === LAYER 3: Depth-of-field bokeh vignette === */}
-      <div className="pointer-events-none fixed inset-0 z-[3] vignette-heavy" />
-
-      {/* === LAYER 4: Subtle top rim light === */}
-      <div className="pointer-events-none fixed top-0 left-0 right-0 h-px z-[4] bg-gradient-to-r from-transparent via-[rgba(255,215,0,0.15)] to-transparent" />
+      {/* === LAYER 3: Perspective Grid === */}
+      <div className="fixed inset-0 z-[2] pointer-events-none perspective-1000">
+        <div className="absolute inset-x-0 bottom-0 h-[40vh] bg-gradient-to-t from-[rgba(255,215,0,0.03)] to-transparent"
+          style={{
+            transform: 'rotateX(60deg) scale(2)',
+            backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(255, 215, 0, .1) 25%, rgba(255, 215, 0, .1) 26%, transparent 27%, transparent 74%, rgba(255, 215, 0, .1) 75%, rgba(255, 215, 0, .1) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(255, 215, 0, .1) 25%, rgba(255, 215, 0, .1) 26%, transparent 27%, transparent 74%, rgba(255, 215, 0, .1) 75%, rgba(255, 215, 0, .1) 76%, transparent 77%, transparent)',
+            backgroundSize: '100px 100px'
+          }}
+        />
+      </div>
 
       {/* === CONTENT === */}
       <div className="relative z-10 w-full min-h-screen flex flex-col">
         {!tokens ? (
           <>
             <Hero />
-            <Login onLogin={handleAuth} busy={busy} error={error} />
+            <div id="auth-terminal" className="min-h-screen flex items-center justify-center relative">
+              {/* Transition Zone — Fog gets denser here */}
+              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black pointer-events-none" />
+              <Login onLogin={handleAuth} busy={busy} error={error} />
+            </div>
           </>
         ) : (
           <Dashboard tokens={tokens} onLogout={logout} />

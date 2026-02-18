@@ -42,6 +42,8 @@ type WsUrlOptions = {
   afterEventId?: number;
 };
 
+export const WS_URL = base.replace(/^http/, "ws");
+
 export function wsUrl(token: string, options: WsUrlOptions = {}): string {
   const protocol = base.startsWith("https") ? "wss" : "ws";
   const stripped = base.replace(/^https?:\/\//, "");
