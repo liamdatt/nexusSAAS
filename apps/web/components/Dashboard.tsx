@@ -199,8 +199,8 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [personaStatus, setPersonaStatus] = useState("");
     const [error, setError] = useState("");
 
-    const [leftPanelOpen, setLeftPanelOpen] = useState(true);
-    const [rightPanelOpen, setRightPanelOpen] = useState(true);
+    const [leftPanelOpen, setLeftPanelOpen] = useState(false);
+    const [rightPanelOpen, setRightPanelOpen] = useState(false);
     const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
 
     const logEndRef = useRef<HTMLDivElement>(null);
@@ -221,6 +221,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const googlePopupRef = useRef<Window | null>(null);
     const googlePollIntervalRef = useRef<number | null>(null);
     const googleMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
+    const layoutInitializedRef = useRef(false);
 
     const runtimeIsActive = useMemo(() => {
         const state = status?.actual_state;
@@ -893,8 +894,30 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         logEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [logRows]);
 
+    useEffect(() => {
+        if (layoutInitializedRef.current) return;
+        layoutInitializedRef.current = true;
+        const desktop = window.matchMedia("(min-width: 1280px)").matches;
+        const laptop = window.matchMedia("(min-width: 1024px)").matches;
+        if (desktop) {
+            setLeftPanelOpen(true);
+            setRightPanelOpen(true);
+            return;
+        }
+        if (laptop) {
+            setLeftPanelOpen(true);
+            setRightPanelOpen(false);
+            return;
+        }
+        setLeftPanelOpen(false);
+        setRightPanelOpen(false);
+    }, []);
+
     return (
-        <div className="relative h-screen w-full flex flex-col bg-black/40 overflow-hidden text-white font-sans text-sm perspective-1000">
+        <div
+            className="relative h-[100dvh] min-h-[100dvh] w-full flex flex-col bg-black/40 overflow-x-hidden overflow-y-auto text-white font-sans text-sm perspective-1000"
+            style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
             <header className="flex-none h-14 flex items-center justify-between px-6 border-b border-[rgba(255,255,255,0.08)] bg-black/60 backdrop-blur-md z-40 relative">
                 <div className="flex items-center gap-4">
                     <div className="w-8 h-8 relative">
@@ -927,16 +950,16 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 </div>
             </header>
 
-            <main className="flex-1 relative flex overflow-hidden">
+            <main className="flex-1 relative flex min-h-0 overflow-hidden">
                 <AnimatePresence mode="wait">
                     {leftPanelOpen && (
                         <motion.aside
                             initial={{ x: -300, opacity: 0 }}
                             animate={{ x: 0, opacity: 1 }}
                             exit={{ x: -300, opacity: 0 }}
-                            className="w-80 h-full p-4 flex flex-col gap-4 z-30"
+                            className="absolute left-0 top-0 h-full min-h-0 w-[min(20rem,92vw)] lg:relative lg:w-80 p-3 sm:p-4 flex flex-col gap-4 z-30 bg-black/35 backdrop-blur-sm lg:bg-transparent lg:backdrop-blur-0"
                         >
-                            <HudPanel title="VITALS_MONITOR" className="flex-none h-64">
+                            <HudPanel title="VITALS_MONITOR" className="flex-none h-56 sm:h-64">
                                 <div className="relative w-full h-full flex items-center justify-center">
                                     <svg viewBox="0 0 100 100" className="w-40 h-40 animate-spin-slow-reverse opacity-80">
                                         <circle cx="50" cy="50" r="45" fill="none" stroke="#333" strokeWidth="2" strokeDasharray="4 2" />
@@ -963,8 +986,8 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                 </div>
                             </HudPanel>
 
-                            <HudPanel title="UPLINK_STATUS" className="flex-1">
-                                <div className="space-y-4">
+                            <HudPanel title="UPLINK_STATUS" className="flex-1 min-h-0">
+                                <div className="h-full overflow-y-auto pr-1 space-y-4">
                                     <div className="flex items-center gap-3 p-2 bg-white/5 border-l-2 border-[--status-success]">
                                         <div className="flex-1">
                                             <div className="text-xs font-bold text-white mb-1">RUNTIME</div>
@@ -1158,7 +1181,7 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                             initial={{ x: 300, opacity: 0 }}
                             animate={{ x: 0, opacity: 1 }}
                             exit={{ x: 300, opacity: 0 }}
-                            className="w-80 h-full bg-black/80 backdrop-blur-xl border-l border-[rgba(255,255,255,0.1)] z-30 flex flex-col"
+                            className="absolute right-0 top-0 h-full min-h-0 w-[min(20rem,92vw)] lg:relative lg:w-80 bg-black/80 backdrop-blur-xl border-l border-[rgba(255,255,255,0.1)] z-30 flex flex-col"
                         >
                             <div className="p-4 border-b border-[rgba(255,255,255,0.05)]">
                                 <h2 className="font-display font-bold text-[--accent-gold]">SYSTEM_CONFIG</h2>

@@ -2,7 +2,6 @@
 
 import React from "react";
 import { cn } from "../../lib/utils";
-import { motion } from "framer-motion";
 
 interface HudPanelProps extends React.HTMLAttributes<HTMLDivElement> {
     title?: string;
@@ -59,7 +58,7 @@ export default function HudPanel({
                 </div>
 
                 {/* Content Area */}
-                <div className={cn("relative p-4", collapsed && "opacity-0 pointer-events-none")}>
+                <div className={cn("relative p-4 h-[calc(100%-2.25rem)] overflow-y-auto", collapsed && "opacity-0 pointer-events-none")}>
                     {children}
 
                     {/* Corner Accents inside content */}
