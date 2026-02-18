@@ -496,6 +496,7 @@ def test_google_connect_start_returns_auth_url(client: TestClient) -> None:
     assert "state=" in body["auth_url"]
     scope = parse_qs(urlparse(body["auth_url"]).query).get("scope", [""])[0].split()
     assert "https://www.googleapis.com/auth/documents" in scope
+    assert "https://www.googleapis.com/auth/drive.file" in scope
     assert "https://www.googleapis.com/auth/documents.readonly" not in scope
 
 

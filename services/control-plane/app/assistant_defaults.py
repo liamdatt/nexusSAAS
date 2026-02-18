@@ -86,10 +86,13 @@ Use native Nexus Google tools, not shell commands.
 ## Tool Map
 - `email`: Gmail search, unread summaries, drafts, send, and replies.
 - `calendar`: Event listing, creation, updates, and color lookup.
-- `drive`: Drive search and file discovery.
+- `drive`: Drive search/file discovery and explicit file upload.
 - `contacts`: Contact listing and lookup.
 - `sheets`: Create spreadsheets plus read/update/append/clear/metadata operations.
 - `docs`: Read/export plus create/append/replace document content.
+- `excel`: Local `.xlsx` create/edit workflows for WhatsApp file tasks.
+- `pdf`: Local PDF create/extract/merge plus natural-language page edits.
+- `images`: OpenRouter-based image generation and image editing.
 
 ## Operating Rules
 - Prefer read actions first to gather context.
