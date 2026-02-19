@@ -7,6 +7,9 @@ import Login from "@/components/Login";
 import Dashboard from "@/components/Dashboard";
 import Particles from "@/components/ui/Particles";
 import Aurora from "@/components/ui/Aurora";
+import SplashCursor from "@/components/ui/SplashCursor";
+import Features from "@/components/Features";
+import Onboarding from "@/components/Onboarding";
 
 type AuthResponse = {
   user: { id: number; email: string; created_at: string };
@@ -120,9 +123,20 @@ export default function Home() {
 
       {/* === CONTENT === */}
       <div className="relative z-10 w-full min-h-screen flex flex-col">
+        {!tokens && (
+          <SplashCursor
+            SIM_RESOLUTION={128}
+            DYE_RESOLUTION={512}
+            COLOR_UPDATE_SPEED={10}
+            BACK_COLOR={{ r: 0.0, g: 0.0, b: 0.0 }}
+            TRANSPARENT={true}
+          />
+        )}
         {!tokens ? (
           <>
             <Hero />
+            <Features />
+            <Onboarding />
             <div id="auth-terminal" className="min-h-screen flex items-center justify-center relative">
               {/* Transition Zone — Fog gets denser here */}
               <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black pointer-events-none" />
