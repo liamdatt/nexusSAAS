@@ -262,7 +262,32 @@ def test_compose_restart_with_image_uses_up_detached(tmp_path: Path, monkeypatch
 
     second_call = run_mock.call_args_list[1].args[0]
     assert second_call[:4] == ["docker", "compose", "-f", str(manager.compose_file("abc123"))]
-    assert second_call[4:] == ["up", "-d"]
+    assert second_call[4:] == ["up", "-d", "--force-recreate"]
+
+
+def test_compose_restart_without_image_uses_up_force_recreate(tmp_path: Path, monkeypatch) -> None:
+    compose_template = tmp_path / "compose.tmpl"
+    env_template = tmp_path / "env.tmpl"
+    compose_template.write_text("service tenant ${TENANT_ID} image ${NEXUS_IMAGE}\n", encoding="utf-8")
+    env_template.write_text("unused\n", encoding="utf-8")
+
+    monkeypatch.setenv("TENANT_ROOT", str(tmp_path / "tenants"))
+    monkeypatch.setenv("TEMPLATE_COMPOSE_PATH", str(compose_template))
+    monkeypatch.setenv("TEMPLATE_ENV_PATH", str(env_template))
+
+    get_settings.cache_clear()
+    manager = RuntimeManager()
+    manager.write_compose("abc123", "ghcr.io/test/image:1")
+    manager.write_runtime_env("abc123", {"BRIDGE_SHARED_SECRET": "secret"})
+
+    with patch("app.runtime_manager.subprocess.run") as run_mock:
+        run_mock.return_value.stdout = ""
+        run_mock.return_value.stderr = ""
+        manager.compose_restart("abc123")
+
+    args = run_mock.call_args.args[0]
+    assert args[:4] == ["docker", "compose", "-f", str(manager.compose_file("abc123"))]
+    assert args[4:] == ["up", "-d", "--force-recreate"]
 
 
 def test_compose_start_rejects_placeholder_nexus_image(tmp_path: Path, monkeypatch) -> None:

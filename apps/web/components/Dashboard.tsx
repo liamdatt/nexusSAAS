@@ -780,9 +780,34 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
             setError(`Unsupported model: ${modelSelected}`);
             return;
         }
+        const wasRunning = runtimeIsActive;
         if (!modelChanged) {
+            if (!wasRunning) {
+                setModelStatus("Model already selected.");
+                return;
+            }
+            const restartProceed = window.confirm(
+                `Model is already set to ${modelSelected}. Restart runtime to reapply now?`,
+            );
+            if (!restartProceed) {
+                return;
+            }
+            setModelBusy(true);
+            setError("");
+            setModelStatus("");
+            try {
+                await api(`/v1/tenants/${tenantId}/runtime/restart`, { method: "POST" }, tokens.access_token);
+                await fetchStatus(tenantId, tokens.access_token);
+                await loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
+                setModelStatus("Runtime restarted with current model.");
+            } catch (err) {
+                setError((err as Error).message);
+            } finally {
+                setModelBusy(false);
+            }
             return;
         }
+
         const proceed = window.confirm(
             `Switch model to ${modelSelected}? Runtime will restart automatically if currently running.`,
         );
@@ -802,7 +827,6 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                 NEXUS_LLM_FALLBACK_MODEL: modelSelected,
             };
             const removeKeys = Object.keys(originalConfig).filter((key) => !(key in values));
-            const wasRunning = runtimeIsActive;
             await applyConfig(values, removeKeys);
             setModelCurrent(modelSelected);
             setModelStatus(
@@ -1305,10 +1329,21 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                                     </span>
                                                     <button
                                                         onClick={() => void confirmModelSwitch()}
-                                                        disabled={modelBusy || configBusy || runtimeBusy || !modelChanged}
+                                                        disabled={
+                                                            modelBusy ||
+                                                            configBusy ||
+                                                            runtimeBusy ||
+                                                            (!modelChanged && !runtimeIsActive)
+                                                        }
                                                         className="px-3 py-1 border border-[--accent-gold] text-[--accent-gold] hover:bg-[--accent-gold] hover:text-black font-mono text-[10px] uppercase tracking-wider disabled:opacity-40"
                                                     >
-                                                        {modelBusy ? "APPLYING..." : "CONFIRM SWITCH"}
+                                                        {modelBusy
+                                                            ? "APPLYING..."
+                                                            : modelChanged
+                                                              ? "CONFIRM SWITCH"
+                                                              : runtimeIsActive
+                                                                ? "REAPPLY (RESTART)"
+                                                                : "UNCHANGED"}
                                                     </button>
                                                 </div>
                                                 {modelStatus && (

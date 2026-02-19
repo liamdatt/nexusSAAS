@@ -372,9 +372,10 @@ class RuntimeManager:
             self.ensure_nexus_image_available(image)
             if self._migrate_compose_image(tenant_id, image):
                 logger.info("Updated tenant compose image for tenant_id=%s image=%s", tenant_id, image)
-            self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d"])
+            self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d", "--force-recreate"])
             return
-        self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "restart"])
+        # Restart does not reload updated env_file values; recreate so config/env changes take effect.
+        self._run(["docker", "compose", "-f", str(self.compose_file(tenant_id)), "up", "-d", "--force-recreate"])
 
     def compose_down(self, tenant_id: str, remove_volumes: bool = False) -> None:
         self.validate_layout(tenant_id, require_existing=True)
