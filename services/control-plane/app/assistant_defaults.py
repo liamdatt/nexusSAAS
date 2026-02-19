@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-ASSISTANT_DEFAULTS_VERSION = "2026-02-18-skill-parity-v1"
+ASSISTANT_DEFAULTS_VERSION = "2026-02-19-whatsapp-format-v1"
 
 PROMPT_DEFAULTS: dict[str, str] = {
     "system": """# Nexus System Prompt
@@ -75,6 +75,7 @@ Learn more: https://floproltd.com
 - For write/destructive operations, rely on confirmation-gated tool flows.
 - If a tool call fails, report the error clearly and continue with the best fallback.
 - Keep user-visible output concise; include only high-signal details.
+- For WhatsApp replies, avoid Markdown headings/tables; use short section labels and `-` bullets.
 """.strip(),
 }
 
