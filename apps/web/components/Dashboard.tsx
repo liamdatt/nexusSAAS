@@ -71,6 +71,7 @@ const MODEL_OPTIONS = [
     "anthropic/claude-sonnet-4.6",
     "google/gemini-3-flash-preview",
     "moonshotai/kimi-k2.5",
+    "minimax/minimax-m2.5",
 ] as const;
 const CONFIG_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SENSITIVE_KEY_RE = /(KEY|SECRET|TOKEN|PASSWORD)/i;
