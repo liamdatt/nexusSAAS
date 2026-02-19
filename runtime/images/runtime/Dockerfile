@@ -21,7 +21,8 @@ RUN if [ -z "$NEXUS_SHA" ]; then \
       echo "NEXUS_SHA build arg is required" >&2; \
       exit 1; \
     fi \
-    && uv tool install "flopro-nexus @ git+https://github.com/${NEXUS_GIT_REPO}.git@${NEXUS_SHA}"
+    && uv tool install "flopro-nexus @ git+https://github.com/${NEXUS_GIT_REPO}.git@${NEXUS_SHA}" \
+    && uv tool install "nano-pdf>=0.2.1"
 
 WORKDIR /srv/nexus
 COPY runtime/images/runtime/entrypoint.sh /entrypoint.sh

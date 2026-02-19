@@ -5,7 +5,6 @@ import QRCode from "qrcode";
 import { motion, AnimatePresence } from "framer-motion";
 import { api, apiBase, Tokens, wsUrl } from "@/lib/api";
 import HudPanel from "./ui/HudPanel";
-import Orb from "./ui/Orb";
 
 type DashboardProps = {
     tokens: Tokens;
@@ -54,19 +53,10 @@ type EventSource = "ws" | "poll_incremental" | "poll_latest";
 type WhatsAppLinkState = "unknown" | "connected" | "disconnected";
 type QrState = "idle" | "waiting" | "ready" | "timeout";
 
-type ConfigKey = {
+type ConfigRow = {
+    id: string;
     key: string;
     value: string;
-    description: string;
-    is_secret: boolean;
-    category: string;
-};
-
-type ConfigManifest = {
-    groups: {
-        category: string;
-        items: ConfigKey[];
-    }[];
 };
 
 type LogEntry = {
@@ -76,7 +66,40 @@ type LogEntry = {
     source: string;
 };
 
+const DEFAULT_CHAT_MODEL = "google/gemini-3-flash-preview";
+const MODEL_OPTIONS = [
+    "anthropic/claude-sonnet-4.6",
+    "google/gemini-3-flash-preview",
+    "moonshotai/kimi-k2.5",
+] as const;
+const CONFIG_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SENSITIVE_KEY_RE = /(KEY|SECRET|TOKEN|PASSWORD)/i;
+const REQUIRED_SECRET_KEYS = ["NEXUS_OPENROUTER_API_KEY", "NEXUS_BRAVE_API_KEY"] as const;
+const HIDDEN_CONFIG_KEYS = new Set<string>([
+    "NEXUS_MODEL",
+    "NEXUS_LLM_PRIMARY_MODEL",
+    "NEXUS_LLM_COMPLEX_MODEL",
+    "NEXUS_LLM_FALLBACK_MODEL",
+    "NEXUS_CLI_ENABLED",
+    "NEXUS_CONFIG_DIR",
+    "NEXUS_DATA_DIR",
+    "NEXUS_PROMPTS_DIR",
+    "NEXUS_SKILLS_DIR",
+    "NEXUS_BRIDGE_WS_URL",
+    "NEXUS_BRIDGE_BIND_HOST",
+    "NEXUS_EXCEL_RECALC_ENABLED",
+    "NEXUS_EXCEL_RECALC_TIMEOUT_SECONDS",
+    "NEXUS_EXCEL_STRICT_FORMULA_ERRORS",
+    "BRIDGE_HOST",
+    "BRIDGE_PORT",
+    "BRIDGE_QR_MODE",
+    "BRIDGE_EXIT_ON_CONNECT",
+    "BRIDGE_SESSION_DIR",
+    "BRIDGE_MEDIA_DIR",
+    "BRIDGE_MEDIA_MAX_BYTES",
+    "BRIDGE_MEDIA_RETENTION_HOURS",
+    "BRIDGE_SHARED_SECRET",
+]);
 
 function safeJsonParse<T>(
     value: string,
@@ -117,40 +140,46 @@ function extractQr(payload?: Record<string, unknown>): string {
     return typeof raw === "string" ? raw : "";
 }
 
-function toCategory(key: string): string {
-    if (SENSITIVE_KEY_RE.test(key)) return "SECRETS";
-    if (key.startsWith("NEXUS_")) return "NEXUS";
-    const prefix = key.split("_")[0]?.trim();
-    if (prefix && prefix.length > 1 && prefix !== key) {
-        return prefix.toUpperCase();
-    }
-    return "GENERAL";
+function makeConfigRow(key: string, value: string): ConfigRow {
+    return {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        key,
+        value,
+    };
 }
 
-function toConfigManifest(env: Record<string, string>): ConfigManifest {
-    const grouped = new Map<string, ConfigKey[]>();
+function isSecretKeyName(key: string): boolean {
+    return SENSITIVE_KEY_RE.test(key);
+}
 
-    for (const [key, value] of Object.entries(env)) {
-        const category = toCategory(key);
-        const row: ConfigKey = {
-            key,
-            value,
-            description: "",
-            is_secret: SENSITIVE_KEY_RE.test(key),
-            category,
-        };
-        const bucket = grouped.get(category) ?? [];
-        bucket.push(row);
-        grouped.set(category, bucket);
+function shouldExposeSecretKey(key: string): boolean {
+    return isSecretKeyName(key) && !HIDDEN_CONFIG_KEYS.has(key);
+}
+
+function toSecretConfigRows(env: Record<string, string>): ConfigRow[] {
+    const rows: ConfigRow[] = [];
+    const included = new Set<string>();
+    for (const key of Object.keys(env).sort((a, b) => a.localeCompare(b))) {
+        if (!shouldExposeSecretKey(key)) {
+            continue;
+        }
+        rows.push(makeConfigRow(key, env[key] ?? ""));
+        included.add(key);
     }
+    for (const key of REQUIRED_SECRET_KEYS) {
+        if (!included.has(key)) {
+            rows.push(makeConfigRow(key, env[key] ?? ""));
+        }
+    }
+    return rows;
+}
 
-    const categoryOrder = Array.from(grouped.keys()).sort((a, b) => a.localeCompare(b));
-    return {
-        groups: categoryOrder.map((category) => ({
-            category,
-            items: (grouped.get(category) ?? []).sort((a, b) => a.key.localeCompare(b.key)),
-        })),
-    };
+function deriveCurrentModel(env: Record<string, string>): string {
+    const raw = (env.NEXUS_MODEL || env.NEXUS_LLM_PRIMARY_MODEL || DEFAULT_CHAT_MODEL).trim();
+    if ((MODEL_OPTIONS as readonly string[]).includes(raw)) {
+        return raw;
+    }
+    return DEFAULT_CHAT_MODEL;
 }
 
 function compactPayload(payload?: Record<string, unknown>): string {
@@ -180,8 +209,13 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [tenantId, setTenantId] = useState("");
     const [status, setStatus] = useState<StatusResponse | null>(null);
     const [events, setEvents] = useState<EventItem[]>([]);
-    const [configValues, setConfigValues] = useState<Record<string, string>>({});
+    const [configRows, setConfigRows] = useState<ConfigRow[]>([]);
     const [originalConfig, setOriginalConfig] = useState<Record<string, string>>({});
+    const [revealedConfigRows, setRevealedConfigRows] = useState<Record<string, boolean>>({});
+    const [modelCurrent, setModelCurrent] = useState<string>(DEFAULT_CHAT_MODEL);
+    const [modelSelected, setModelSelected] = useState<string>(DEFAULT_CHAT_MODEL);
+    const [modelBusy, setModelBusy] = useState(false);
+    const [modelStatus, setModelStatus] = useState("");
     const [persona, setPersona] = useState("");
 
     const [latestQr, setLatestQr] = useState("");
@@ -195,12 +229,12 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
     const [googleBusy, setGoogleBusy] = useState(false);
 
     const [runtimeBusy, setRuntimeBusy] = useState(false);
-    const [configBusyKey, setConfigBusyKey] = useState<string | null>(null);
+    const [configBusy, setConfigBusy] = useState(false);
+    const [configStatus, setConfigStatus] = useState("");
     const [personaBusy, setPersonaBusy] = useState(false);
     const [personaStatus, setPersonaStatus] = useState("");
     const [error, setError] = useState("");
 
-    const [leftPanelOpen, setLeftPanelOpen] = useState(false); // Kept for legacy/mobile menu if needed, or removed
     const [rightPanelOpen, setRightPanelOpen] = useState(true);
     const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<"config" | "soul">("config");
@@ -244,8 +278,8 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         return "GOOGLE SERVICES DISCONNECTED";
     }, [googleBusy, googleConnected]);
 
-    const configManifest = useMemo(() => toConfigManifest(configValues), [configValues]);
     const logRows = useMemo(() => events.map((event) => toLogEntry(event)), [events]);
+    const modelChanged = useMemo(() => modelSelected !== modelCurrent, [modelCurrent, modelSelected]);
 
     function stopQrPolling() {
         qrPollGeneration.current += 1;
@@ -392,10 +426,14 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         try {
             const data = await api<ConfigResponse>(`/v1/tenants/${id}/config`, {}, token);
             setOriginalConfig(data.env_json);
-            setConfigValues(data.env_json);
+            setConfigRows(toSecretConfigRows(data.env_json));
+            setModelCurrent(deriveCurrentModel(data.env_json));
+            setModelSelected(deriveCurrentModel(data.env_json));
         } catch {
             setOriginalConfig({});
-            setConfigValues({});
+            setConfigRows(toSecretConfigRows({}));
+            setModelCurrent(DEFAULT_CHAT_MODEL);
+            setModelSelected(DEFAULT_CHAT_MODEL);
         }
     }
 
@@ -643,28 +681,137 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
         }
     }
 
-    async function saveConfigValue(key: string) {
-        if (!tenantId) return;
-        const current = configValues[key] ?? "";
-        const original = originalConfig[key] ?? "";
-        if (current === original) return;
+    function updateConfigRow(id: string, field: "key" | "value", next: string) {
+        setConfigRows((prev) => prev.map((row) => (row.id === id ? { ...row, [field]: next } : row)));
+    }
 
-        setConfigBusyKey(key);
+    function addConfigRow() {
+        setConfigRows((prev) => [...prev, makeConfigRow("", "")]);
+    }
+
+    function removeConfigRow(id: string) {
+        setConfigRows((prev) => prev.filter((row) => row.id !== id));
+        setRevealedConfigRows((prev) => {
+            const copy = { ...prev };
+            delete copy[id];
+            return copy;
+        });
+    }
+
+    function toggleRevealConfigRow(id: string) {
+        setRevealedConfigRows((prev) => ({ ...prev, [id]: !prev[id] }));
+    }
+
+    function rowsToSecretMap(rows: ConfigRow[]): Record<string, string> {
+        const values: Record<string, string> = {};
+        const seen = new Set<string>();
+        for (const row of rows) {
+            const key = row.key.trim();
+            if (!key) {
+                throw new Error("Config variable name is required.");
+            }
+            if (!CONFIG_KEY_RE.test(key)) {
+                throw new Error(`Invalid config key: ${key}`);
+            }
+            if (!isSecretKeyName(key)) {
+                throw new Error(`Config key must be secret-like (KEY/SECRET/TOKEN/PASSWORD): ${key}`);
+            }
+            if (HIDDEN_CONFIG_KEYS.has(key)) {
+                throw new Error(`Config key is reserved and managed by the platform: ${key}`);
+            }
+            if (seen.has(key)) {
+                throw new Error(`Duplicate config key: ${key}`);
+            }
+            seen.add(key);
+            values[key] = row.value;
+        }
+        return values;
+    }
+
+    async function applyConfig(values: Record<string, string>, removeKeys: string[]) {
+        if (!tenantId) return;
+        await api(
+            `/v1/tenants/${tenantId}/config`,
+            { method: "PATCH", body: JSON.stringify({ values, remove_keys: removeKeys }) },
+            tokens.access_token,
+        );
+        await loadConfig(tenantId, tokens.access_token);
+        await fetchStatus(tenantId, tokens.access_token);
+        await loadRecentEvents(tenantId, tokens.access_token, "poll_latest", { limit: 20 });
+    }
+
+    async function saveSecretConfig() {
+        if (!tenantId) return;
+        setConfigBusy(true);
         setError("");
+        setConfigStatus("");
         try {
-            const values = { ...configValues };
-            const removeKeys = Object.keys(originalConfig).filter((existing) => !(existing in values));
-            await api(
-                `/v1/tenants/${tenantId}/config`,
-                { method: "PATCH", body: JSON.stringify({ values, remove_keys: removeKeys }) },
-                tokens.access_token,
-            );
-            await loadConfig(tenantId, tokens.access_token);
-            await fetchStatus(tenantId, tokens.access_token);
+            const secretMap = rowsToSecretMap(configRows);
+            const merged = { ...originalConfig };
+            for (const key of Object.keys(merged)) {
+                if (shouldExposeSecretKey(key) || REQUIRED_SECRET_KEYS.includes(key as (typeof REQUIRED_SECRET_KEYS)[number])) {
+                    delete merged[key];
+                }
+            }
+            for (const [key, value] of Object.entries(secretMap)) {
+                merged[key] = value;
+            }
+            if (!merged.NEXUS_OPENROUTER_API_KEY?.trim()) {
+                const proceed = window.confirm(
+                    "NEXUS_OPENROUTER_API_KEY is empty or removed. Runtime start/pairing may fail. Save anyway?",
+                );
+                if (!proceed) {
+                    return;
+                }
+            }
+            const removeKeys = Object.keys(originalConfig).filter((key) => !(key in merged));
+            await applyConfig(merged, removeKeys);
+            setConfigStatus("Secret configuration updated.");
         } catch (err) {
             setError((err as Error).message);
         } finally {
-            setConfigBusyKey(null);
+            setConfigBusy(false);
+        }
+    }
+
+    async function confirmModelSwitch() {
+        if (!tenantId) return;
+        if (!(MODEL_OPTIONS as readonly string[]).includes(modelSelected)) {
+            setError(`Unsupported model: ${modelSelected}`);
+            return;
+        }
+        if (!modelChanged) {
+            return;
+        }
+        const proceed = window.confirm(
+            `Switch model to ${modelSelected}? Runtime will restart automatically if currently running.`,
+        );
+        if (!proceed) {
+            return;
+        }
+
+        setModelBusy(true);
+        setError("");
+        setModelStatus("");
+        try {
+            const values = {
+                ...originalConfig,
+                NEXUS_MODEL: modelSelected,
+                NEXUS_LLM_PRIMARY_MODEL: modelSelected,
+                NEXUS_LLM_COMPLEX_MODEL: modelSelected,
+                NEXUS_LLM_FALLBACK_MODEL: modelSelected,
+            };
+            const removeKeys = Object.keys(originalConfig).filter((key) => !(key in values));
+            const wasRunning = runtimeIsActive;
+            await applyConfig(values, removeKeys);
+            setModelCurrent(modelSelected);
+            setModelStatus(
+                wasRunning ? "Model updated; runtime restarting." : "Model saved; will apply on next start.",
+            );
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setModelBusy(false);
         }
     }
 
@@ -1135,53 +1282,109 @@ export default function Dashboard({ tokens, onLogout }: DashboardProps) {
                                             transition={{ duration: 0.2 }}
                                             className="absolute inset-0 overflow-y-auto p-4 space-y-6 custom-scrollbar"
                                         >
-                                            <div className="p-4 border border-[--accent-gold] bg-[--accent-gold]/5 mb-4">
-                                                <h3 className="text-[--accent-gold] text-xs font-bold mb-1">ENVIRONMENT VARIABLES</h3>
-                                                <p className="text-[10px] text-[--text-muted]">Manage sensitive keys and runtime flags.</p>
+                                            <div className="p-4 border border-[--accent-gold] bg-[--accent-gold]/5 space-y-3">
+                                                <h3 className="text-[--accent-gold] text-xs font-bold">MODEL SWITCHER</h3>
+                                                <p className="text-[10px] text-[--text-muted]">
+                                                    Select the default Nexus chat model and confirm to apply.
+                                                </p>
+                                                <select
+                                                    value={modelSelected}
+                                                    onChange={(e) => setModelSelected(e.target.value)}
+                                                    disabled={modelBusy || configBusy}
+                                                    className="w-full bg-black/40 border border-white/15 px-2 py-2 font-mono text-[11px] text-white focus:border-[--accent-gold] focus:outline-none"
+                                                >
+                                                    {MODEL_OPTIONS.map((option) => (
+                                                        <option key={option} value={option}>
+                                                            {option}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="text-[9px] font-mono text-[--text-muted] break-all">
+                                                        Current: {modelCurrent}
+                                                    </span>
+                                                    <button
+                                                        onClick={() => void confirmModelSwitch()}
+                                                        disabled={modelBusy || configBusy || runtimeBusy || !modelChanged}
+                                                        className="px-3 py-1 border border-[--accent-gold] text-[--accent-gold] hover:bg-[--accent-gold] hover:text-black font-mono text-[10px] uppercase tracking-wider disabled:opacity-40"
+                                                    >
+                                                        {modelBusy ? "APPLYING..." : "CONFIRM SWITCH"}
+                                                    </button>
+                                                </div>
+                                                {modelStatus && (
+                                                    <p className="text-[9px] font-mono text-[--status-success]">{modelStatus}</p>
+                                                )}
                                             </div>
 
-                                            {configManifest.groups.length === 0 && (
-                                                <p className="text-[10px] font-mono text-[--text-muted]">No config loaded.</p>
-                                            )}
-                                            {configManifest.groups.map((group) => (
-                                                <div key={group.category} className="space-y-3">
-                                                    <h3 className="font-mono text-[10px] text-[--text-secondary] uppercase tracking-widest pl-2 border-l border-[--accent-gold]">
-                                                        {group.category}
-                                                    </h3>
-                                                    <div className="space-y-2">
-                                                        {group.items.map((item) => {
-                                                            const isSaving = configBusyKey === item.key;
-                                                            return (
-                                                                <div key={item.key} className="group/item relative">
-                                                                    <label className="block text-[9px] font-mono text-[--text-muted] mb-1 truncate">{item.key}</label>
-                                                                    <div className="relative">
-                                                                        <input
-                                                                            type={item.is_secret ? "password" : "text"}
-                                                                            value={configValues[item.key] ?? ""}
-                                                                            onChange={(e) => {
-                                                                                const next = e.target.value;
-                                                                                setConfigValues((prev) => ({ ...prev, [item.key]: next }));
-                                                                            }}
-                                                                            onBlur={() => void saveConfigValue(item.key)}
-                                                                            disabled={isSaving}
-                                                                            className="w-full bg-white/5 border border-white/10 px-2 py-1.5 font-mono text-[10px] text-[--accent-gold] focus:border-[--accent-gold] focus:outline-none transition-colors group-hover/item:border-white/20 disabled:opacity-50"
-                                                                        />
-                                                                        {item.is_secret && (
-                                                                            <div className="absolute inset-0 bg-black/90 flex items-center px-3 opacity-100 group-hover/item:opacity-0 transition-opacity pointer-events-none border border-white/5">
-                                                                                <span className="text-[9px] text-[--text-muted] tracking-widest">ENCRYPTED_VALUE</span>
-                                                                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
-                                                                            </div>
-                                                                        )}
-                                                                        {isSaving && (
-                                                                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[--text-muted] font-mono">SAVING</span>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        })}
+                                            <div className="p-4 border border-white/10 bg-white/5 space-y-3">
+                                                <h3 className="text-white text-xs font-bold mb-1">SECRET ENV VARIABLES</h3>
+                                                <p className="text-[10px] text-[--text-muted]">
+                                                    Only secret-style keys are shown. Add/remove keys, then save all changes.
+                                                </p>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                {configRows.length === 0 && (
+                                                    <p className="text-[10px] font-mono text-[--text-muted]">No secret keys configured.</p>
+                                                )}
+                                                {configRows.map((row) => (
+                                                    <div key={row.id} className="group relative p-2 border border-white/10 bg-black/30">
+                                                        <div className="flex items-center gap-2 mb-2">
+                                                            <input
+                                                                value={row.key}
+                                                                onChange={(e) => updateConfigRow(row.id, "key", e.target.value)}
+                                                                className="flex-1 bg-white/5 border border-white/10 px-2 py-1.5 font-mono text-[10px] text-white focus:border-[--accent-gold] focus:outline-none"
+                                                                placeholder="SECRET_KEY_NAME"
+                                                                disabled={configBusy || modelBusy}
+                                                            />
+                                                            <button
+                                                                onClick={() => removeConfigRow(row.id)}
+                                                                disabled={configBusy || modelBusy}
+                                                                className="px-2 py-1 border border-[--status-error] text-[--status-error] text-[9px] font-mono uppercase disabled:opacity-40"
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <input
+                                                                type={revealedConfigRows[row.id] ? "text" : "password"}
+                                                                value={row.value}
+                                                                onChange={(e) => updateConfigRow(row.id, "value", e.target.value)}
+                                                                className="flex-1 bg-white/5 border border-white/10 px-2 py-1.5 font-mono text-[10px] text-[--accent-gold] focus:border-[--accent-gold] focus:outline-none"
+                                                                placeholder="value"
+                                                                disabled={configBusy || modelBusy}
+                                                            />
+                                                            <button
+                                                                onClick={() => toggleRevealConfigRow(row.id)}
+                                                                disabled={configBusy || modelBusy}
+                                                                className="px-2 py-1 border border-white/20 text-[--text-muted] text-[9px] font-mono uppercase disabled:opacity-40"
+                                                            >
+                                                                {revealedConfigRows[row.id] ? "Hide" : "Show"}
+                                                            </button>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ))}
+                                                ))}
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <button
+                                                    onClick={addConfigRow}
+                                                    disabled={configBusy || modelBusy}
+                                                    className="w-full py-2 border border-dashed border-white/20 text-[--text-muted] hover:text-white font-mono text-[10px] uppercase tracking-widest disabled:opacity-40"
+                                                >
+                                                    + Add Secret Key
+                                                </button>
+                                                <button
+                                                    onClick={() => void saveSecretConfig()}
+                                                    disabled={configBusy || modelBusy}
+                                                    className="w-full py-2 border border-[--accent-gold] text-[--accent-gold] hover:bg-[--accent-gold] hover:text-black font-mono text-xs uppercase tracking-widest disabled:opacity-40"
+                                                >
+                                                    {configBusy ? "Saving..." : "Save Environment"}
+                                                </button>
+                                                {configStatus && (
+                                                    <p className="text-[9px] font-mono text-[--status-success]">{configStatus}</p>
+                                                )}
+                                            </div>
                                         </motion.div>
                                     ) : (
                                         <motion.div
